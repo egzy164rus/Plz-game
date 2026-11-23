@@ -29,3 +29,9 @@ B — магазин · Esc — пауза/отмена размещения · 
 
 ## Стек
 Three.js r128 (vendored, без CDN), чистый JS, без сборки. Тесты: `v03_test.py` (Playwright).
+
+## PWA
+Игра — устанавливаемое веб-приложение: `manifest.webmanifest`, service worker `sw.js` (кэш `pvz-v1`,
+cache-first), иконки 192/512 + maskable, apple-touch-icon, `theme-color #7b2ff7`.
+Работает офлайн после первого визита; на телефоне: «Добавить на главный экран».
+При каждом релизе меняйте версию кэша в `sw.js` (`pvz-v1` → `pvz-v2`).
