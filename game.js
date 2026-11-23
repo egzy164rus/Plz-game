@@ -110,6 +110,10 @@ const G = {
   pvzName: 'У Дома',
   pvzLogo: '📦',
   qrLaser: null,
+  unpackAnim: null,       // { t, dur, mesh, spawned }
+  tapWorldHit: false,
+  layout: 0,              // применённая планировка зала
+  layoutsByLoc: {},       // выбранная планировка для каждой локации
 };
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -134,6 +138,18 @@ const TABLE_POS = { x: -4.4, z: -0.9 };
 const BIN_POS = { x: -6.6, z: 3.7 };
 const COUNTER_POS = { x: 4.0, z: 2.4 };
 const COUNTER_APPROACH = { x: 4.0, z: 3.6 };
+const PALLET_POS = { x: -7.0, z: -1.0 };
+// Планировки зала — те же 0-3, что и схемы в каталоге помещений
+const LAYOUTS = [
+  { name: 'Классика',   table: { x: -4.4, z: -0.9 }, bin: { x: -6.6, z: 3.7 },  counter: { x: 4.0, z: 2.4 }, pallet: { x: -7.0, z: -1.0 }, queueDir: 1, rug: { x: 4.0, z: 3.6 }, bench: null },
+  { name: 'Витрина',    table: { x: 4.3, z: -0.9 },  bin: { x: 6.3, z: 3.7 },   counter: { x: -4.0, z: 2.4 }, pallet: { x: 6.6, z: -1.3 }, queueDir: -1, rug: { x: -4.0, z: 3.6 }, bench: { x: 2.6, z: 4.55 } },
+  { name: 'Open space', table: { x: 0, z: -0.9 },    bin: { x: -7.35, z: -3.6 }, counter: { x: 4.0, z: 1.6 },  pallet: { x: -7.0, z: 0.3 },  queueDir: 1, rug: { x: 0, z: 1.7 },  bench: { x: -3.1, z: 3.4 } },
+  { name: 'Флагман',    table: { x: -3.6, z: -0.9 }, bin: { x: 6.7, z: -3.5 },   counter: { x: 1.6, z: 2.5 },  pallet: { x: 7.2, z: -0.7 },  queueDir: 1, rug: { x: 0.2, z: 4.15 }, bench: { x: -6.6, z: 2.5 } },
+];
+const layoutRefs = {};
+let counterGlowLight = null;
+let coffeeMachineRef = null;
+let benchRef = null;
 
 // ============================================================
 //  Рекорды (localStorage)
@@ -153,6 +169,12 @@ function saveRecords() {
     if (e > p.earned) localStorage.setItem('pvz_best_earned', String(e));
     if (G.day > p.day) localStorage.setItem('pvz_best_day', String(G.day));
   } catch (e) {}
+}
+function loadLayouts() {
+  try { return JSON.parse(localStorage.getItem('pvz_layouts') || '{}') || {}; } catch (e) { return {}; }
+}
+function saveLayouts() {
+  try { localStorage.setItem('pvz_layouts', JSON.stringify(G.layoutsByLoc)); } catch (e) {}
 }
 function loadBrand() {
   try {
@@ -391,7 +413,8 @@ lamp.position.set(0, 3.0, 0.5);
 scene.add(lamp);
 
 const colliders = [];
-const addCollider = (minX, maxX, minZ, maxZ) => colliders.push({ minX, maxX, minZ, maxZ });
+const addCollider = (minX, maxX, minZ, maxZ, owner) => colliders.push({ minX, maxX, minZ, maxZ, owner });
+function removeLayoutColliders() { for (let i = colliders.length - 1; i >= 0; i--) if (colliders[i].owner === 'layout') colliders.splice(i, 1); }
 
 function boxMesh(w, h, d, color, opts = {}) {
   const { castShadow = true, ...matOpts } = opts;
@@ -452,10 +475,6 @@ function buildRoom() {
   snowGround.receiveShadow = true;
   world.add(snowGround);
 
-  const rug = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 2.2), new THREE.MeshLambertMaterial({ map: TEX.rug() }));
-  rug.rotation.x = -Math.PI / 2; rug.position.set(4.0, 0.015, 3.6); rug.receiveShadow = true;
-  world.add(rug);
-
   const wallTex = TEX.wall();
   const wallMat = new THREE.MeshLambertMaterial({ map: wallTex });
   const mkWall = (w, h, d, x, y, z, rotY = 0) => {
@@ -500,9 +519,9 @@ function buildRoom() {
   addCollider(-1.35, 1.35, southZ - 0.2, southZ + 0.6);
 
   // Тёплая лампа над стойкой
-  const counterGlow = new THREE.PointLight(0xffd9a0, 0.4, 6);
-  counterGlow.position.set(COUNTER_POS.x, 2.4, COUNTER_POS.z);
-  world.add(counterGlow);
+  counterGlowLight = new THREE.PointLight(0xffd9a0, 0.4, 6);
+  counterGlowLight.position.set(COUNTER_POS.x, 2.4, COUNTER_POS.z);
+  world.add(counterGlowLight);
 }
 
 function buildSeasonDecor() {
@@ -587,9 +606,10 @@ function buildPallet() {
   for (let i = -0.7; i <= 0.7; i += 0.7) {
     const block = boxMesh(0.25, 0.1, 1.5, 0x8a6136); block.position.set(i, 0.03, 0); g.add(block);
   }
-  g.position.set(-7.0, 0, -1.0);
+  g.position.set(PALLET_POS.x, 0, PALLET_POS.z);
   world.add(g);
-  addCollider(-8.15, -5.95, -1.9, -0.1);
+  addCollider(PALLET_POS.x - 1.15, PALLET_POS.x + 1.15, PALLET_POS.z - 0.85, PALLET_POS.z + 0.85, 'layout');
+  layoutRefs.pallet = g;
 }
 function buildCounter() {
   const g = new THREE.Group();
@@ -601,10 +621,12 @@ function buildCounter() {
   const termStand = cylMesh(0.03, 0.05, 0.28, 0x2b233c); termStand.position.set(-1.0, 1.22, 0.2); g.add(termStand);
   g.position.set(COUNTER_POS.x, 0, COUNTER_POS.z);
   world.add(g);
-  addCollider(2.5, 5.5, 1.9, 2.9);
+  addCollider(COUNTER_POS.x - 1.5, COUNTER_POS.x + 1.5, COUNTER_POS.z - 0.5, COUNTER_POS.z + 0.5, 'layout');
   tagInteract(g, 'counter');
   tagInteract(term, 'qr');
   furniture.counter = g;
+  layoutRefs.counter = g;
+  layoutRefs.counterTerm = term;
 }
 // Фирменная вывеска с названием ПВЗ (пересобирается под имя игрока)
 let nameBoard = null;
@@ -630,9 +652,10 @@ function buildUnpackTable() {
   const knife = boxMesh(0.3, 0.04, 0.09, 0xd43d3d); knife.position.set(-0.5, 0.985, 0.25); g.add(knife);
   g.position.set(TABLE_POS.x, 0, TABLE_POS.z);
   world.add(g);
-  addCollider(-5.65, -3.15, -1.6, -0.2);
+  addCollider(TABLE_POS.x - 1.25, TABLE_POS.x + 1.25, TABLE_POS.z - 0.75, TABLE_POS.z + 0.7, 'layout');
   tagInteract(g, 'table');
   furniture.table = g;
+  layoutRefs.table = g;
 }
 function buildBin() {
   const g = new THREE.Group();
@@ -642,8 +665,9 @@ function buildBin() {
   label.position.set(0, 0.55, 0.41); g.add(label);
   g.position.set(BIN_POS.x, 0, BIN_POS.z);
   world.add(g);
-  addCollider(-7.05, -6.15, 3.25, 4.15);
+  addCollider(BIN_POS.x - 0.5, BIN_POS.x + 0.5, BIN_POS.z - 0.45, BIN_POS.z + 0.45, 'layout');
   tagInteract(g, 'bin');
+  layoutRefs.bin = g;
 }
 function buildShelf(slotIndex) {
   const slotX = [-5.85, -1.95, 1.95, 5.85][slotIndex];
@@ -703,6 +727,7 @@ function buildCoffeeMachine() {
   lampDot.position.set(0.12, 0.36, 0.19); g.add(lampDot);
   g.position.set(COUNTER_POS.x - 1.05, 1.1, COUNTER_POS.z - 0.05);
   world.add(g);
+  coffeeMachineRef = g;
 }
 function buildPoster() {
   const p = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.45), new THREE.MeshLambertMaterial({ map: TEX.poster() }));
@@ -846,14 +871,38 @@ function makeBigBoxMesh() {
   const body = boxMesh(0.95, 0.68, 0.72, 0xc8a06a); body.position.y = 0.34; g.add(body);
   const tape = boxMesh(0.97, 0.69, 0.16, 0x8a6136); tape.position.y = 0.34; g.add(tape);
   const fragile = boxMesh(0.3, 0.2, 0.02, 0xffffff); fragile.position.set(0, 0.4, 0.37); g.add(fragile);
+  // Крышки — отдельные пивоты, чтобы играть «вскрытие коробки»
+  const flapMat = new THREE.MeshLambertMaterial({ color: 0xb98a5a });
+  const mkFlap = (w, h, d, px, pz, childX, childZ) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(px, 0.68, pz);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), flapMat);
+    m.position.set(childX, 0.026, childZ);
+    m.castShadow = true;
+    pivot.add(m); g.add(pivot);
+    return pivot;
+  };
+  const front = mkFlap(0.93, 0.05, 0.35, 0, 0.36, 0, -0.175);
+  const back = mkFlap(0.93, 0.05, 0.35, 0, -0.36, 0, 0.175);
+  const left = mkFlap(0.35, 0.05, 0.62, -0.475, 0, 0.175, 0);
+  const right = mkFlap(0.35, 0.05, 0.62, 0.475, 0, -0.175, 0);
+  left.position.y = right.position.y = 0.735;
+  g.userData.flaps = { front, back, left, right };
   return g;
 }
+const BIGBOX_OFFSETS = [[-0.15, -0.5], [0.85, 0.2], [-0.4, 0.62]];
 function spawnBigBox() {
+  // ищем свободный слот у паллеты — короба не должны наползать друг на друга
+  let spot = null;
+  for (const [ox, oz] of BIGBOX_OFFSETS) {
+    const px = PALLET_POS.x + ox, pz = PALLET_POS.z + oz;
+    const busy = bigBoxes.some(b => Math.hypot(b.position.x - px, b.position.z - pz) < 1.0);
+    if (!busy) { spot = [px, pz]; break; }
+  }
+  if (!spot) return null; // у паллеты места нет — поставка подождёт
   const mesh = makeBigBoxMesh();
-  const spots = [[-7.1, -1.45], [-6.15, -0.75], [-7.3, -0.35]];
-  const spot = spots[bigBoxes.length % spots.length];
-  mesh.position.set(spot[0] + rand(-0.1, 0.1), 0.16, spot[1] + rand(-0.1, 0.1));
-  mesh.rotation.y = rand(-0.3, 0.3);
+  mesh.position.set(spot[0] + rand(-0.05, 0.05), 0.16, spot[1] + rand(-0.05, 0.05));
+  mesh.rotation.y = rand(-0.12, 0.12);
   world.add(mesh);
   const item = { kind: 'big', mesh, docScanned: false };
   floorItems.push(item);
@@ -1339,6 +1388,77 @@ function updateInventoryHUD() {
 }
 
 // ============================================================
+//  Планировки зала (3D): разные расстановки, выбираются игроком
+// ============================================================
+function buildRugBase(L) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 2.2), new THREE.MeshLambertMaterial({ map: TEX.rug() }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(L.rug.x, 0.015, L.rug.z);
+  m.receiveShadow = true;
+  world.add(m);
+  layoutRefs.rugBase = m;
+}
+function buildBench(L) {
+  const g = new THREE.Group();
+  const seat = boxMesh(1.7, 0.1, 0.55, 0xa8783f); seat.position.y = 0.46; g.add(seat);
+  const back = boxMesh(1.7, 0.45, 0.09, 0x8a6136); back.position.set(0, 0.8, -0.235); g.add(back);
+  for (const sx of [-0.68, 0.68]) { const leg = boxMesh(0.12, 0.46, 0.5, 0x6b4a2f); leg.position.set(sx, 0.23, 0); g.add(leg); }
+  for (const sx of [-0.68, 0.68]) { const post = boxMesh(0.09, 0.36, 0.09, 0x6b4a2f); post.position.set(sx, 0.68, -0.235); g.add(post); }
+  g.position.set(L.bench.x, 0, L.bench.z);
+  world.add(g);
+  addCollider(L.bench.x - 0.9, L.bench.x + 0.9, L.bench.z - 0.3, L.bench.z + 0.3, 'layout');
+  layoutRefs.bench = g;
+}
+function buildLayoutObjects() {
+  const L = LAYOUTS[G.layout];
+  buildPallet();
+  buildUnpackTable();
+  buildBin();
+  buildCounter();
+  buildRugBase(L);
+  if (L.bench) buildBench(L);
+}
+function clearLayoutObjects() {
+  removeLayoutColliders();
+  if (layoutRefs.counterTerm) { untagInteract(layoutRefs.counterTerm); layoutRefs.counterTerm = null; }
+  for (const key of ['counter', 'table', 'bin', 'pallet', 'rugBase', 'bench']) {
+    const obj = layoutRefs[key];
+    if (obj) untagInteract(obj);
+    if (obj && obj.parent) obj.parent.remove(obj);
+    layoutRefs[key] = null;
+  }
+}
+function applyLayout(idx) {
+  const L = LAYOUTS[idx];
+  if (!L) return;
+  G.layout = idx;
+  const oldTable = { x: TABLE_POS.x, z: TABLE_POS.z };
+  TABLE_POS.x = L.table.x; TABLE_POS.z = L.table.z;
+  BIN_POS.x = L.bin.x; BIN_POS.z = L.bin.z;
+  COUNTER_POS.x = L.counter.x; COUNTER_POS.z = L.counter.z;
+  COUNTER_APPROACH.x = L.counter.x; COUNTER_APPROACH.z = L.counter.z + 1.2;
+  PALLET_POS.x = L.pallet.x; PALLET_POS.z = L.pallet.z;
+  clearLayoutObjects();
+  buildLayoutObjects();
+  if (nameBoard) nameBoard.position.set(COUNTER_POS.x, 2.35, COUNTER_POS.z);
+  if (counterGlowLight) counterGlowLight.position.set(COUNTER_POS.x, 2.4, COUNTER_POS.z);
+  if (coffeeMachineRef) coffeeMachineRef.position.set(COUNTER_POS.x - 1.05, 1.1, COUNTER_POS.z - 0.05);
+  const ax = COUNTER_APPROACH.x, az = COUNTER_APPROACH.z, qd = L.queueDir;
+  QUEUE_SLOTS[0].set(ax, 0, az + 0.15);
+  QUEUE_SLOTS[1].set(ax + 1.25 * qd, 0, az + 0.55);
+  QUEUE_SLOTS[2].set(ax + 2.5 * qd, 0, az + 0.75);
+  if (typeof relayoutQueue === 'function') relayoutQueue();
+  // посылки на столе переезжают вместе со столом (строка из трёх)
+  const onTable = parcels.filter(p => !p.cell && Math.abs(p.mesh.position.y - 0.96) < 0.2
+    && Math.hypot(p.mesh.position.x - oldTable.x, p.mesh.position.z - oldTable.z) < 1.7);
+  onTable.forEach((p, i) => {
+    p.mesh.position.set(TABLE_POS.x + PARCEL_ROW[i % PARCEL_ROW.length], 0.96, TABLE_POS.z);
+  });
+  G.layoutsByLoc[G.location] = idx;
+  saveLayouts();
+}
+
+// ============================================================
 //  Помещения
 // ============================================================
 const PLANS = [
@@ -1358,8 +1478,13 @@ function renderLocations() {
   for (const loc of LOCATIONS) {
     const owned = G.ownedLocations.includes(loc.id);
     const current = G.location === loc.id;
+    const curPlan = (G.layoutsByLoc[loc.id] != null ? G.layoutsByLoc[loc.id] : loc.plan);
     const card = document.createElement('div');
     card.className = 'loc-card' + (current ? ' current' : '');
+    card.dataset.loc = loc.id;
+    const planChips = owned
+      ? `<div class="loc-layouts"><span>3D-планировка</span><div class="layout-chips">${LAYOUTS.map((l, i) => `<button class="layout-chip${i === curPlan ? ' active' : ''}" data-loc="${loc.id}" data-plan="${i}">${l.name}</button>`).join('')}</div></div>`
+      : '';
     const stats = `
       <div class="loc-stats">
         <div>Поток клиентов: <b>×${loc.customers.toFixed(2)}</b></div>
@@ -1379,13 +1504,29 @@ function renderLocations() {
       <div class="loc-plan">${PLANS[loc.plan]}</div>
       ${stats}
       <div class="loc-note" style="margin:2px 0 0;font-size:10.5px">${loc.blurb}</div>
+      ${planChips}
       <div class="loc-price">${loc.rent > 0 ? `Аренда ${loc.rent} ₽ + ЖКХ` : 'Только ЖКХ 60 ₽'}</div>
       ${action}`;
+    card.querySelectorAll('.layout-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const idx = +chip.dataset.plan;
+        G.layoutsByLoc[loc.id] = idx;
+        saveLayouts();
+        if (loc.id === G.location) {
+          applyLayout(idx);
+          toast(`Планировка «${LAYOUTS[idx].name}» применена`, 'good');
+        } else {
+          toast(`Планировка «${LAYOUTS[idx].name}» будет ждать вас в «${loc.name}»`, 'good');
+        }
+        renderLocations();
+      });
+    });
     const btn = card.querySelector('.loc-btn');
     btn.addEventListener('click', () => {
       if (current) return;
       if (owned) {
         G.location = loc.id;
+        applyLayout(G.layoutsByLoc[loc.id] != null ? G.layoutsByLoc[loc.id] : loc.plan);
         toast(`Вы переехали: ${loc.name} 🏠`, 'good');
         AudioSys.move();
       } else {
@@ -1393,6 +1534,7 @@ function renderLocations() {
         G.money -= loc.price;
         G.ownedLocations.push(loc.id);
         G.location = loc.id;
+        applyLayout(G.layoutsByLoc[loc.id] != null ? G.layoutsByLoc[loc.id] : loc.plan);
         toast(`Помещение выкуплено: ${loc.name}! 🎉`, 'good');
         AudioSys.move();
       }
@@ -1610,7 +1752,7 @@ function pickupFloorItem(item) {
 }
 function attachCarried(mesh) {
   if (mesh.parent) mesh.parent.remove(mesh);
-  mesh.position.set(0, 1.66, 0.16);
+  mesh.position.set(0, 0.92, 0.34);
   mesh.rotation.set(0, 0, 0);
   player.add(mesh);
 }
@@ -1719,12 +1861,23 @@ function finishTtn() {
   AudioSys.scan();
   updateHUD();
 }
+const PARCEL_ROW = [-0.62, 0, 0.62];
 function finishUnpack() {
-  const item = detachCarried();
-  world.remove(item.mesh);
+  const item = detachCarried();      // снять с рук
+  item.mesh.position.set(TABLE_POS.x, 0.98, TABLE_POS.z);  // и на стол
+  item.mesh.rotation.set(0, rand(-0.18, 0.18), 0);
+  item.mesh.scale.setScalar(1);
+  G.unpackAnim = { t: 0, dur: 1.2, mesh: item.mesh, spawned: false };
+  G.action = null;
+  document.getElementById('scan-progress').classList.add('hidden');
+  AudioSys.unpack();
+}
+function spawnUnpackedParcels() {
   const spawned = [];
   for (let i = 0; i < BALANCE.parcelsPerBox; i++) {
-    spawned.push(spawnParcel(TABLE_POS.x + rand(-0.7, 0.7), TABLE_POS.z + rand(-0.35, 0.35), 0.96));
+    const p = spawnParcel(TABLE_POS.x + PARCEL_ROW[i % 3], TABLE_POS.z, 0.96);
+    p.mesh.rotation.y = rand(-0.12, 0.12);
+    spawned.push(p);
   }
   const defects = spawned.filter(p => p.type === 'defect').length;
   const thermal = spawned.filter(p => p.type === 'thermal').length;
@@ -1732,10 +1885,24 @@ function finishUnpack() {
   if (defects) msg = `Короб вскрыт · обнаружен брак: ${defects}!`;
   else if (thermal) msg = 'Короб вскрыт · есть ТЕРМО-посылки (60 с)';
   toast(msg, defects ? 'warn' : 'good');
-  G.action = null;
-  document.getElementById('scan-progress').classList.add('hidden');
-  AudioSys.unpack();
   parcelsDirty = true;
+}
+function updateUnpackAnim(dt) {
+  const a = G.unpackAnim;
+  if (!a) return;
+  a.t += dt;
+  const k = Math.min(1, a.t / a.dur);
+  const ease = k * k * (3 - 2 * k); // smoothstep
+  const f = a.mesh.userData.flaps;
+  if (f) {
+    f.front.rotation.x = 2.0 * ease;
+    f.back.rotation.x = -2.0 * ease;
+    f.left.rotation.z = 2.0 * ease;
+    f.right.rotation.z = -2.0 * ease;
+  }
+  a.mesh.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.09);
+  if (k >= 0.55 && !a.spawned) { a.spawned = true; spawnUnpackedParcels(); }
+  if (k >= 1) { world.remove(a.mesh); G.unpackAnim = null; }
 }
 function finishScan() {
   const customer = G.action.customer;
@@ -1915,7 +2082,7 @@ function getInteraction() {
     const big = nearestFloorItem('big');
     if (big.item && big.dist < 1.7) return { label: 'Поднять короб (внутри 3 посылки)', action: () => pickupFloorItem(big.item) };
     const par = nearestFloorItem('parcel');
-    if (par.item && par.dist < 1.5) return { label: `Поднять ${par.id}${TYPE_SHORT[par.item.parcel.type] || ''}`, action: () => pickupFloorItem(par.item) };
+    if (par.item && par.dist < 1.5) return { label: `Поднять ${par.item.id}${TYPE_SHORT[par.item.parcel.type] || ''}`, action: () => pickupFloorItem(par.item) };
     const { cell, dist } = nearestCellWithParcel();
     if (cell && dist < 1.75) {
       const wanted = cell.parcel.reservedBy ? ' · нужно клиенту' : '';
@@ -2075,23 +2242,27 @@ function updateLoader(dt) {
     }
   } else if (L.state === 'toTable') {
     if (moveTo(TABLE_POS, 1.1)) {
-      if (L.carrying) { loaderCarryRemove(L.carrying.mesh); }
-      for (let i = 0; i < BALANCE.parcelsPerBox; i++) {
-        spawnParcel(TABLE_POS.x + rand(-0.6, 0.6), TABLE_POS.z + rand(-0.3, 0.3), 0.96);
+      if (L.carrying) {
+        const box = L.carrying.mesh;
+        if (box.parent) box.parent.remove(box);
+        world.add(box);
+        box.position.set(TABLE_POS.x, 0.98, TABLE_POS.z);
+        box.rotation.set(0, rand(-0.15, 0.15), 0);
+        box.scale.setScalar(1);
+        G.unpackAnim = { t: 0, dur: 1.2, mesh: box, spawned: false };
+        L.carrying = null;
       }
-      L.carrying = null;
       L.state = 'idle';
       L.timer = BALANCE.loaderCooldown;
       AudioSys.unpack();
       toast('Денис вскрыл короб 📦');
-      parcelsDirty = true;
     }
   }
 }
 function attachCarriedTo(L, mesh) {
   mesh.visible = true;
   if (mesh.parent) mesh.parent.remove(mesh);
-  mesh.position.set(0, 1.62, 0.14);
+  mesh.position.set(0, 0.92, 0.34);
   mesh.rotation.set(0, 0, 0);
   L.mesh.add(mesh);
 }
@@ -2142,52 +2313,81 @@ canvas.addEventListener('pointerdown', e => {
   if (G.screen !== 'play') return;
   if (G.placing) {
     if (e.button === 2) { cancelPlacement(); return; }
-    commitPlacement();
+    if (e.pointerType === 'touch' || e.button === 0) commitPlacement();
     return;
   }
   if (e.button !== 0 && e.pointerType === 'mouse') return;
+  if (e.pointerType === 'touch' && e.clientX < window.innerWidth * 0.45) return; // левая половина — движение
   const rect = canvas.getBoundingClientRect();
   mouseNDC.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(mouseNDC, camera);
   const hits = raycaster.intersectObjects(clickables, true);
+  if (e.pointerType === 'touch') G.tapWorldHit = hits.length > 0;
   if (!hits.length) return;
   const root = hits[0].object.userData.hitRoot;
   if (root) handleWorldClick(root);
 });
 
-// Сенсорный джойстик
+// ---- Сенсор: управление в любом месте экрана ----
 const isTouchMode = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 const touchUi = document.getElementById('touch-ui');
 const joystickEl = document.getElementById('joystick');
 const joyNub = document.getElementById('joy-nub');
 const btnTouchE = document.getElementById('btn-touch-e');
 const joyVec = { x: 0, y: 0 };
-let joyPointer = null;
-function joyUpdate(clientX, clientY) {
-  const rect = joystickEl.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
-  let dx = clientX - cx, dy = clientY - cy;
-  const max = rect.width / 2 - 10;
-  const len = Math.hypot(dx, dy);
-  if (len > max) { dx = dx / len * max; dy = dy / len * max; }
-  joyVec.x = dx / max; joyVec.y = dy / max;
-  joyNub.style.transform = `translate(-50%,-50%) translate(${dx}px,${dy}px)`;
-}
-function joyReset() {
-  joyPointer = null;
-  joyVec.x = 0; joyVec.y = 0;
+const JOY_MAX = 44;
+const joyState = { active: false, id: -1, ox: 0, oy: 0 };
+let tapStart = null;
+const uiHit = (t) => !!(t && t.closest && t.closest('button,input,#hud,#order-card,#build-hint,#scan-progress,#shop,#locations,#day-end,#pause,#menu,#loading,#gameover,#victory,#toasts,#touch-ui'));
+if (isTouchMode) touchUi.classList.remove('hidden');
+function joyShow(x, y) {
+  joystickEl.style.left = x + 'px';
+  joystickEl.style.top = y + 'px';
+  joystickEl.classList.add('show');
   joyNub.style.transform = 'translate(-50%,-50%)';
 }
-if (isTouchMode) touchUi.classList.remove('hidden');
-joystickEl.addEventListener('pointerdown', e => {
-  joyPointer = e.pointerId;
-  try { joystickEl.setPointerCapture(joyPointer); } catch (err) {}
-  joyUpdate(e.clientX, e.clientY);
-  e.preventDefault();
-});
-joystickEl.addEventListener('pointermove', e => { if (e.pointerId === joyPointer) joyUpdate(e.clientX, e.clientY); });
-joystickEl.addEventListener('pointerup', joyReset);
-joystickEl.addEventListener('pointercancel', joyReset);
+function joyHide() {
+  joyState.active = false; joyState.id = -1;
+  joyVec.x = 0; joyVec.y = 0;
+  joystickEl.classList.remove('show');
+}
+function joyMove(x, y) {
+  let dx = x - joyState.ox, dy = y - joyState.oy;
+  const len = Math.hypot(dx, dy);
+  if (len > JOY_MAX) { dx = dx / len * JOY_MAX; dy = dy / len * JOY_MAX; }
+  joyVec.x = dx / JOY_MAX; joyVec.y = dy / JOY_MAX;
+  joyNub.style.transform = `translate(-50%,-50%) translate(${dx}px,${dy}px)`;
+}
+document.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  if (uiHit(e.target)) return;
+  if (e.clientX < window.innerWidth * 0.45) {
+    if (G.screen !== 'play') return;
+    joyState.active = true; joyState.id = e.pointerId;
+    joyState.ox = e.clientX; joyState.oy = e.clientY;
+    joyShow(e.clientX, e.clientY);
+  } else {
+    tapStart = { x: e.clientX, y: e.clientY, t: performance.now() };
+  }
+}, { passive: true });
+document.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'touch') return;
+  if (joyState.active && e.pointerId === joyState.id) { joyMove(e.clientX, e.clientY); e.preventDefault(); }
+}, { passive: false });
+function touchEnd(e) {
+  if (e.pointerType !== 'touch') return;
+  if (joyState.active && e.pointerId === joyState.id) { joyHide(); return; }
+  if (tapStart) {
+    const dx = e.clientX - tapStart.x, dy = e.clientY - tapStart.y;
+    const quick = performance.now() - tapStart.t < 350 && Math.hypot(dx, dy) < 14;
+    const hitWorld = G.tapWorldHit === true;
+    tapStart = null;
+    G.tapWorldHit = false;
+    if (quick && !hitWorld && G.screen === 'play' && !G.placing) doInteract();
+  }
+}
+document.addEventListener('pointerup', touchEnd);
+document.addEventListener('pointercancel', touchEnd);
 btnTouchE.addEventListener('pointerdown', e => { e.preventDefault(); doInteract(); });
 
 // Кнопки UI
@@ -2342,7 +2542,7 @@ function updateDeliveries(dt) {
     const inFlight = floorItems.filter(i => i.kind === 'big').length;
     const want = Math.min(1 + Math.floor((G.day - 1) / 2) + (G.mods.extraBox || 0), BALANCE.maxBigBoxes + 1);
     let spawned = 0;
-    for (let i = 0; i < want && inFlight + spawned < BALANCE.maxBigBoxes + 1; i++) { spawnBigBox(); spawned++; }
+    for (let i = 0; i < want && inFlight + spawned < BALANCE.maxBigBoxes + 1; i++) { if (spawnBigBox()) spawned++; }
     if (spawned > 0) { toast('🚚 Поставка прибыла! Короба у паллеты (слева)', 'good'); AudioSys.door(); }
   }
 }
@@ -2387,6 +2587,7 @@ function highlightWantedCells() {
 }
 function updateGameplay(dt) {
   updatePlayer(dt);
+  updateUnpackAnim(dt);
   updateDeliveries(dt);
   updateCustomersSpawn(dt);
   updateCustomers(dt);
@@ -2457,13 +2658,11 @@ window.addEventListener('resize', onResize);
 // ============================================================
 //  Построение мира и запуск
 // ============================================================
+G.layoutsByLoc = loadLayouts();
 buildRoom();
 buildSeasonDecor();
 buildSnow();
-buildPallet();
-buildCounter();
-buildUnpackTable();
-buildBin();
+applyLayout(G.layoutsByLoc['metro'] != null ? G.layoutsByLoc['metro'] : 0);
 addShelf(0);
 
 // Загрузочный экран: честно отрабатываем шаги и держим минимум 1.2 с
@@ -2512,7 +2711,7 @@ document.getElementById('btn-start').addEventListener('click', () => {
   toast(`ПВЗ «${G.pvzName}» открывается! 🔔`, 'good');
 });
 
-window.PVZ = { G, player, camera, renderer, parcels, customers, shelves, floorItems, spawnCustomer, spawnReturner, getInteraction, enterPlacement, LOCATIONS };
+window.PVZ = { G, player, camera, renderer, parcels, customers, shelves, floorItems, spawnCustomer, spawnReturner, getInteraction, enterPlacement, LOCATIONS, LAYOUTS, TABLE_POS, BIN_POS, COUNTER_POS, PALLET_POS, QUEUE_SLOTS, applyLayout };
 renderRecords();
 updateHUD();
 camera.position.set(0, 7.6, 10);

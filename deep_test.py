@@ -77,6 +77,13 @@ with sync_playwright() as p:
         wanted = page.evaluate("window.PVZ.customers.map(c=>c.parcel?c.parcel.id:null)")
         print("wanted:", wanted)
 
+        # сначала QR клиента на стойке
+        page.evaluate("() => { window.PVZ.player.position.set(4.0, 0, 3.4); }")
+        page.wait_for_timeout(250)
+        page.keyboard.press("KeyE")
+        page.wait_for_timeout(1300)
+        print("qr scanned:", page.evaluate("window.PVZ.customers[0] && window.PVZ.customers[0].qrScanned"))
+
         # взять нужную посылку из ячейки
         cell = page.evaluate("""() => {
             for (const s of window.PVZ.shelves) for (const c of s.cells)
@@ -92,8 +99,8 @@ with sync_playwright() as p:
             # к стойке
             page.evaluate("() => { window.PVZ.player.position.set(4.0, 0, 3.4); }")
             page.wait_for_timeout(300)
-            page.keyboard.press("KeyE")  # начать сканирование
-            page.wait_for_timeout(2000)
+            page.keyboard.press("KeyE")  # выдача (сканирование заказа)
+            page.wait_for_timeout(2200)
             money = page.evaluate("window.PVZ.G.money")
             issued = page.evaluate("window.PVZ.G.issuedToday")
             print("money:", money, "issuedToday:", issued)

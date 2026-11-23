@@ -96,10 +96,17 @@ button{font-family:inherit}
 
 /* ============ Сенсор ============ */
 #touch-ui{position:absolute;inset:0;z-index:6;pointer-events:none}
-#joystick{position:absolute;left:18px;bottom:30px;width:124px;height:124px;border-radius:50%;background:rgba(255,255,255,.06);border:2px solid rgba(255,255,255,.16);pointer-events:auto;touch-action:none;user-select:none}
-#joy-nub{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#8f3dff,#5b1bd6);transform:translate(-50%,-50%);box-shadow:0 4px 14px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.4)}
-#btn-touch-e{position:absolute;right:22px;bottom:48px;width:84px;height:84px;border-radius:50%;border:2px solid #a97bff;background:rgba(123,47,247,.88);color:#fff;font:900 30px/1 inherit;cursor:pointer;pointer-events:auto;touch-action:none;user-select:none;box-shadow:0 8px 26px rgba(123,47,247,.5)}
-#btn-touch-e:active{transform:scale(.93);background:#8f3dff}
+#joystick{position:fixed;left:0;top:0;width:120px;height:120px;border-radius:50%;background:rgba(23,18,31,.8);border:2px solid rgba(255,214,10,.62);box-shadow:0 12px 32px rgba(0,0,0,.5), inset 0 0 26px rgba(123,47,247,.4);z-index:46;pointer-events:none;opacity:0;transform:translate(-50%,-50%) scale(.9);transition:opacity .15s, transform .15s}
+#joystick.show{opacity:.96;transform:translate(-50%,-50%) scale(1)}
+#joy-nub{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#ffd60a,#ffb300);transform:translate(-50%,-50%);box-shadow:0 5px 18px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.55)}
+#btn-touch-e{position:absolute;right:20px;bottom:44px;width:88px;height:88px;border-radius:50%;border:2px solid #ffd60a;background:rgba(123,47,247,.94);color:#fff;font:900 30px/1 inherit;cursor:pointer;pointer-events:auto;touch-action:none;user-select:none;box-shadow:0 12px 30px rgba(0,0,0,.55), 0 0 0 4px rgba(255,214,10,.18)}
+#btn-touch-e:active{transform:scale(.92);background:#8f3dff}
+.loc-layouts{margin-top:4px;border-top:1px solid var(--line);padding-top:8px}
+.loc-layouts>span{font-size:9.5px;letter-spacing:1.5px;color:#a99ecb;text-transform:uppercase}
+.layout-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.layout-chip{background:#2a2438;border:1px solid var(--line);color:#cfc6e8;border-radius:999px;padding:4px 10px;font:700 10.5px/1 inherit;cursor:pointer;transition:.15s}
+.layout-chip:hover{border-color:var(--yellow);color:#fff}
+.layout-chip.active{background:var(--yellow);border-color:var(--yellow);color:var(--ink)}
 
 /* ============ Оверлеи и модалки ============ */
 .overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(10,7,16,.62);backdrop-filter:blur(6px)}

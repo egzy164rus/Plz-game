@@ -1,63 +1,63 @@
-import sys
+import sys, time
 from playwright.sync_api import sync_playwright
 
+URL = "http://localhost:8090/"
 errors = []
+
 with sync_playwright() as p:
     browser = p.chromium.launch(args=["--use-gl=swiftshader", "--enable-unsafe-swiftshader"])
-    ctx = browser.new_context(
-        viewport={"width": 390, "height": 780},
-        has_touch=True,
-        is_mobile=True,
-        device_scale_factor=2,
-    )
+    ctx = browser.new_context(viewport={"width": 420, "height": 760}, has_touch=True, is_mobile=True, device_scale_factor=2)
     page = ctx.new_page()
     page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
-
-    page.goto("http://localhost:8090/", wait_until="networkidle")
-    page.wait_for_timeout(800)
+    page.goto(URL, wait_until="networkidle")
+    page.wait_for_selector("#btn-start", state="visible", timeout=30000)
     page.tap("#btn-start")
-    page.wait_for_timeout(800)
+    page.wait_for_timeout(3500)   # первая поставка
 
-    touch_ui_visible = page.evaluate("!document.getElementById('touch-ui').classList.contains('hidden')")
-    print("touch UI visible:", touch_ui_visible)
+    cdp = ctx.new_cdp_session(page)
 
-    pos0 = page.evaluate("window.PVZ.player.position.toArray()")
-    page.evaluate("""() => {
-        const js = document.getElementById('joystick');
-        const r = js.getBoundingClientRect();
-        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-        js.dispatchEvent(new PointerEvent('pointerdown', {pointerId: 7, clientX: cx, clientY: cy, bubbles: true}));
-        js.dispatchEvent(new PointerEvent('pointermove', {pointerId: 7, clientX: cx, clientY: cy - 70, bubbles: true}));
-    }""")
-    page.wait_for_timeout(1500)
-    pos1 = page.evaluate("window.PVZ.player.position.toArray()")
-    moved = pos0[2] - pos1[2]
-    print(f"player moved toward -z by: {moved:.2f} m (pos0 z={pos0[2]:.2f} -> pos1 z={pos1[2]:.2f})")
-    print("JOYSTICK WORKS:", moved > 0.5)
+    def touch_event(t, pts):
+        cdp.send("Input.dispatchTouchEvent", {"type": t, "touchPoints": pts})
 
-    page.evaluate("""() => {
-        const js = document.getElementById('joystick');
-        js.dispatchEvent(new PointerEvent('pointerup', {pointerId: 7, bubbles: true}));
-    }""")
+    def touch_start(x, y, pid=1):
+        touch_event("touchStart", [{"x": x, "y": y, "id": pid}])
+
+    def touch_move(x, y, pid=1):
+        touch_event("touchMove", [{"x": x, "y": y, "id": pid}])
+
+    def touch_end():
+        touch_event("touchEnd", [])
+
+    # --- 1) плавающий джойстик в произвольном месте левой половины ---
+    before = page.evaluate("[window.PVZ.player.position.x, window.PVZ.player.position.z]")
+    touch_start(120, 520)
+    for i in range(1, 12):
+        touch_move(120 + i * 2.2, 520 - i * 3.4)
+        page.wait_for_timeout(40)
+    touch_end()
     page.wait_for_timeout(300)
-    vel0 = page.evaluate("window.PVZ.player.position.toArray()")
-    page.wait_for_timeout(600)
-    vel1 = page.evaluate("window.PVZ.player.position.toArray()")
-    print("player stops after release:", abs(vel0[2] - vel1[2]) < 0.01)
+    after = page.evaluate("[window.PVZ.player.position.x, window.PVZ.player.position.z]")
+    moved = ((after[0]-before[0])**2 + (after[1]-before[1])**2) ** 0.5
+    print(f"floating joystick: moved {moved:.2f} m  ({before[0]:.1f},{before[1]:.1f}) -> ({after[0]:.1f},{after[1]:.1f})")
+    print("joystick hidden after release:", page.evaluate("!document.getElementById('joystick').classList.contains('show')"))
 
-    # Кнопка E: у паллеты открывается подсказка поднятия, тапим — короб в руках
-    page.wait_for_timeout(2500)  # ждём поставку (≈3с от старта)
-    page.evaluate("""() => {
-        const it = window.PVZ.floorItems.find(i=>i.kind==='big');
-        if (it) window.PVZ.player.position.set(it.mesh.position.x + 0.9, 0, it.mesh.position.z);
-    }""")
+    # --- 2) левая половина НЕ берёт короб (это зона движения) ---
+    box = page.evaluate("""() => { const it = window.PVZ.floorItems.find(i=>i.kind==='big'); if(!it) return null; const p = it.mesh.position; window.PVZ.player.position.set(p.x + 0.9, 0, p.z); return [p.x, p.z]; }""")
     page.wait_for_timeout(200)
-    prompt = page.evaluate("document.getElementById('interact-text').textContent")
-    print("prompt near box:", prompt)
-    page.tap("#btn-touch-e")
-    page.wait_for_timeout(200)
-    print("carried after tap E:", page.evaluate("window.PVZ.G.carried ? window.PVZ.G.carried.kind : null"))
+    if box:
+        touch_start(110, 600); touch_end()   # быстрый тап в левой половине
+        page.wait_for_timeout(200)
+        print("left-half tap does NOT pick up:", page.evaluate("window.PVZ.G.carried") is None)
+
+    # --- 3) правая половина ТАП = активация (взять короб руками) ---
+    touch_start(330, 700); touch_end()   # тап по пустой зоне справа — активация (E)
+    page.wait_for_timeout(250)
+    print("right-half tap picked box:", page.evaluate("window.PVZ.G.carried && window.PVZ.G.carried.kind"))
+
+    # --- 4) прозрачность кнопок: кнопка E почти непрозрачная ---
+    opacity = page.evaluate("getComputedStyle(document.getElementById('btn-touch-e')).backgroundColor")
+    print("E button bg:", opacity)
 
     page.screenshot(path="/home/user/pvz-game/shot_touch.png")
     browser.close()
