@@ -186,6 +186,7 @@ const G = {
   issuedToday: 0,
   tipsToday: 0, tipCombo: 0,
   cardboard: 0,
+  movedLayout: {},
   angryToday: 0,
   totalIssued: 0,
   carried: null,
@@ -201,6 +202,7 @@ const G = {
   upgrades: { shelf: 1, scanner: false, table: false, sofa: false, armchair: false, palm: false, plant: false, coatrack: false, greenwall: false, rug: false, neon: false, coffee: false, sign: false, poster: false, loader: false },
   inventory: [],          // неразмещённая мебель
   placing: null,          // { id, rot, ghost, ring }
+  moveMode: false, moving: null,   // режим перестановки (M): тащим уже стоящие предметы
   autoMove: null,         // { dest:Vector3, arrive, run }
   activeOrder: null,      // { customer, parcel }
   beacon: null,
@@ -330,6 +332,8 @@ function collectSave() {
     boughtCounts: { ...boughtCounts },
     furniture: placedFurniture.map(f => ({ id: f.id, x: +f.x.toFixed(2), z: +f.z.toFixed(2), rot: f.rot })),
     shelves: shelves.length,
+    shelfPositions: shelves.map(s => ({ x: +s.x.toFixed(2), z: +s.z.toFixed(2), rot: +s.rot.toFixed(2) })),
+    movedLayout: { ...G.movedLayout },
     cardboard: G.cardboard || 0,
     parcels: pdata,
     bigBoxes: bigBoxes.map(b => { const fi = floorItems.find(i => i.mesh === b); return { docScanned: !!(fi && fi.docScanned) }; }),
@@ -353,8 +357,14 @@ function applySave(sp) {
   G.layoutsByLoc = { ...(sp.layoutsByLoc || {}) };
   for (const k of Object.keys(boughtCounts)) delete boughtCounts[k];
   Object.assign(boughtCounts, sp.boughtCounts || {});
-  // стеллажи: 0-й построен при загрузке мира — достраиваем остальные
-  for (let i = shelves.length; i < (sp.shelves || 1); i++) addShelf(i);
+  // стеллажи: 0-й построен при загрузке мира — восстанавливаем сохранённые позиции
+  if (Array.isArray(sp.shelfPositions) && sp.shelfPositions.length) {
+    for (const s of [...shelves]) removeShelf(s);
+    for (const p of sp.shelfPositions) makeShelf(p.x, p.z, p.rot || 0);
+  } else {
+    for (let i = shelves.length; i < (sp.shelves || 1); i++) addShelf(i);
+  }
+  G.movedLayout = { ...(sp.movedLayout || {}) };
   G.cardboard = sp.cardboard || 0;
   for (let i = 0; i < Math.min(G.cardboard, 6); i++) spawnCardboardFlat();
   // размещённая мебель
@@ -363,7 +373,7 @@ function applySave(sp) {
   for (const pd of sp.parcels || []) {
     if (pd.carried) { const p = spawnParcel(0, 0.5, 0.96, pd.type || 'normal', pd.id); removeFromFloorItems(p); continue; }
     if (pd.cell) {
-      const shelf = shelves[pd.cell.s];
+      const shelf = shelves.find(s => s.uid === pd.cell.s) || shelves[pd.cell.s];
       const cell = shelf && shelf.cells.find(c => c.row === pd.cell.r && c.col === pd.cell.c);
       if (cell && !cell.parcel) {
         const p = spawnParcel(cell.x, cell.z, cell.y, pd.type || 'normal', pd.id);
@@ -748,8 +758,14 @@ lamp.position.set(0, 3.0, 0.5);
 scene.add(lamp);
 
 const colliders = [];
-const addCollider = (minX, maxX, minZ, maxZ, owner) => colliders.push({ minX, maxX, minZ, maxZ, owner });
+const addCollider = (minX, maxX, minZ, maxZ, owner, cid) => colliders.push({ minX, maxX, minZ, maxZ, owner, cid: cid || null });
 function removeLayoutColliders() { for (let i = colliders.length - 1; i >= 0; i--) if (colliders[i].owner === 'layout') colliders.splice(i, 1); }
+function removeColliderByCid(cid) { for (let i = colliders.length - 1; i >= 0; i--) if (colliders[i].cid === cid) colliders.splice(i, 1); }
+function rotatedColliderRect(x, z, dx, dz, rot) {
+  const c = Math.abs(Math.cos(rot)), s = Math.abs(Math.sin(rot));
+  const ex = dx * c + dz * s, ez = dx * s + dz * c;
+  return [x - ex, x + ex, z - ez, z + ez];
+}
 
 function boxMesh(w, h, d, color, opts = {}) {
   const { castShadow = true, ...matOpts } = opts;
@@ -1051,7 +1067,7 @@ function buildPallet() {
   }
   g.position.set(PALLET_POS.x, 0, PALLET_POS.z);
   world.add(g);
-  addCollider(PALLET_POS.x - 1.15, PALLET_POS.x + 1.15, PALLET_POS.z - 0.85, PALLET_POS.z + 0.85, 'layout');
+  addCollider(PALLET_POS.x - 1.15, PALLET_POS.x + 1.15, PALLET_POS.z - 0.85, PALLET_POS.z + 0.85, 'layout', 'pallet');
   layoutRefs.pallet = g;
 }
 function buildCounter() {
@@ -1085,7 +1101,7 @@ function buildCounter() {
   const termStand = cylMesh(0.03, 0.05, 0.28, 0x2b233c); termStand.position.set(-1.0, 1.22, 0.2); g.add(termStand);
   g.position.set(COUNTER_POS.x, 0, COUNTER_POS.z);
   world.add(g);
-  addCollider(COUNTER_POS.x - 1.5, COUNTER_POS.x + 1.5, COUNTER_POS.z - 0.5, COUNTER_POS.z + 0.5, 'layout');
+  addCollider(COUNTER_POS.x - 1.5, COUNTER_POS.x + 1.5, COUNTER_POS.z - 0.5, COUNTER_POS.z + 0.5, 'layout', 'counter');
   tagInteract(g, 'counter');
   tagInteract(term, 'qr');
   furniture.counter = g;
@@ -1116,7 +1132,7 @@ function buildUnpackTable() {
   const knife = boxMesh(0.3, 0.04, 0.09, 0xd43d3d); knife.position.set(-0.5, 0.985, 0.25); g.add(knife);
   g.position.set(TABLE_POS.x, 0, TABLE_POS.z);
   world.add(g);
-  addCollider(TABLE_POS.x - 1.25, TABLE_POS.x + 1.25, TABLE_POS.z - 0.75, TABLE_POS.z + 0.7, 'layout');
+  addCollider(TABLE_POS.x - 1.25, TABLE_POS.x + 1.25, TABLE_POS.z - 0.75, TABLE_POS.z + 0.7, 'layout', 'table');
   tagInteract(g, 'table');
   furniture.table = g;
   layoutRefs.table = g;
@@ -1129,16 +1145,26 @@ function buildBin() {
   label.position.set(0, 0.55, 0.41); g.add(label);
   g.position.set(BIN_POS.x, 0, BIN_POS.z);
   world.add(g);
-  addCollider(BIN_POS.x - 0.5, BIN_POS.x + 0.5, BIN_POS.z - 0.45, BIN_POS.z + 0.45, 'layout');
+  addCollider(BIN_POS.x - 0.5, BIN_POS.x + 0.5, BIN_POS.z - 0.45, BIN_POS.z + 0.45, 'layout', 'bin');
   tagInteract(g, 'bin');
   layoutRefs.bin = g;
 }
-function buildShelf(slotIndex) {
-  const slotX = [-5.85, -1.95, 1.95, 5.85][slotIndex];
+// Стеллаж: широкая модель 2×8 = 16 ячеек, свободно ставится в любом месте (поворот на 90°)
+const SHELF_W = 6.6, SHELF_D = 0.72, SHELF_H = 2.15;
+const SHELF_COLS = [-2.52, -1.8, -1.08, -0.36, 0.36, 1.08, 1.8, 2.52];
+const SHELF_ROWS_Y = [0.46, 1.36];
+const DEFAULT_SHELF_SPOTS = [
+  { x: -5.05, z: -4.95, rot: 0 },
+  { x:  5.05, z: -4.95, rot: 0 },
+  { x: -5.05, z: -3.9, rot: 0 },   // вторая линия стеллажей для старых сохранений — свободный проход не нужен
+  { x:  5.05, z: -3.9, rot: 0 },
+];
+let shelfUid = 0;
+function buildShelfGroup() {
   const g = new THREE.Group();
   const frameMat = new THREE.MeshStandardMaterial({ color: 0x6d35d6, roughness: 0.38, metalness: 0.6 });
   const boardMat = new THREE.MeshStandardMaterial({ color: 0xd8d4e2, roughness: 0.55, metalness: 0.25 });
-  const W = 3.3, H = 2.15, D = 0.72;
+  const W = SHELF_W, H = SHELF_H, D = SHELF_D;
   for (const sx of [-W / 2, W / 2]) for (const sz of [-D / 2, D / 2]) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, H, 0.1), frameMat);
     post.position.set(sx, H / 2, sz); post.castShadow = true; g.add(post);
@@ -1147,40 +1173,66 @@ function buildShelf(slotIndex) {
     const board = new THREE.Mesh(new THREE.BoxGeometry(W, 0.07, D), boardMat);
     board.position.set(0, y, 0); board.receiveShadow = true; board.castShadow = true; g.add(board);
   }
-  for (const dx of [-0.88, 0.88]) {
+  for (const dx of [-1.65, 0, 1.65]) {
     const div = new THREE.Mesh(new THREE.BoxGeometry(0.05, H - 0.3, D - 0.06), frameMat);
     div.position.set(dx, H / 2 + 0.05, 0); g.add(div);
   }
   const back = new THREE.Mesh(new THREE.BoxGeometry(W, H, 0.05), new THREE.MeshLambertMaterial({ color: 0x8a83a0 }));
   back.position.set(0, H / 2, -D / 2); g.add(back);
-  const plate = boxMesh(1.4, 0.24, 0.04, 0xffd60a); plate.position.set(0, H + 0.14, 0); g.add(plate);
-  g.position.set(slotX, 0, -4.95);
+  const plate = boxMesh(2.2, 0.24, 0.04, 0xffd60a); plate.position.set(0, H + 0.14, 0); g.add(plate);
+  return g;
+}
+const hitBoxMat = new THREE.MeshBasicMaterial({ visible: false });
+function positionShelfCells(s) {
+  const cos = Math.cos(s.rot), sin = Math.sin(s.rot);
+  for (const cell of s.cells) {
+    cell.x = s.x + cell.off * cos;
+    cell.z = s.z + cell.off * sin;
+  }
+}
+function addShelfCollider(s) {
+  const [minX, maxX, minZ, maxZ] = rotatedColliderRect(s.x, s.z, SHELF_W / 2, SHELF_D / 2, s.rot);
+  addCollider(minX - 0.05, maxX + 0.05, minZ - 0.05, maxZ + 0.05, 'shelf', s.cid);
+}
+const shelves = [];
+function makeShelf(x, z, rot) {
+  const g = buildShelfGroup();
+  g.position.set(x, 0, z);
+  g.rotation.y = rot;
   world.add(g);
-  addCollider(slotX - W / 2 - 0.05, slotX + W / 2 + 0.05, -5.35, -4.5);
-
+  const uid = shelfUid++;
   const cells = [];
-  const cellOffsets = [-1.32, -0.44, 0.44, 1.32];
-  // невидимые хитбоксы ячеек — чтобы кликать даже по пустой ячейке
-  const hitMat = new THREE.MeshBasicMaterial({ visible: false });
   for (let row = 0; row < 2; row++) {
-    for (let col = 0; col < 4; col++) {
-      const x = slotX + cellOffsets[col];
-      const y = row === 0 ? 0.46 : 1.36;
-      const cell = { shelf: slotIndex, row, col, x, y, z: -4.88, parcel: null };
-      const hit = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.62, 0.6), hitMat);
-      hit.position.set(x, y + 0.16, -4.85);
-      world.add(hit);
+    for (let col = 0; col < 8; col++) {
+      const off = SHELF_COLS[col];
+      const y = SHELF_ROWS_Y[row];
+      const cell = { shelf: uid, row, col, off, y, x: 0, z: 0, parcel: null };
+      const hit = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.62, 0.6), hitBoxMat);
+      hit.position.set(off, y + 0.16, 0.03);
+      g.add(hit);
       tagInteract(hit, 'cell', { cell });
       cells.push(cell);
     }
   }
-  return { slotIndex, x: slotX, group: g, cells };
-}
-const shelves = [];
-function addShelf(index) {
-  const s = buildShelf(index);
+  const s = { uid, x, z, rot, group: g, cells, cid: 'shelf' + uid };
+  positionShelfCells(s);
+  addShelfCollider(s);
   shelves.push(s);
   return s;
+}
+function removeShelf(s) {
+  removeColliderByCid(s.cid);
+  for (const cell of s.cells) { /* хиты — дети группы, уходят вместе с ней */ }
+  for (const cell of s.cells) {
+    if (cell.parcel) { const p = cell.parcel; cell.parcel = null; p.cell = null; }
+  }
+  if (s.group) { world.remove(s.group); }
+  const i = shelves.indexOf(s);
+  if (i >= 0) shelves.splice(i, 1);
+}
+function addShelf(index) {
+  const d = DEFAULT_SHELF_SPOTS[Math.min(index || 0, DEFAULT_SHELF_SPOTS.length - 1)];
+  return makeShelf(d.x, d.z, d.rot);
 }
 function buildCoffeeMachine() {
   const g = new THREE.Group();
@@ -1305,11 +1357,16 @@ function makeNeon() {
   const frame = boxMesh(1.45, 0.95, 0.06, 0x150a26); frame.position.set(0, 1.25, -0.045); g.add(frame);
   return { group: g, footprint: 0.55, collider: { dx: 0.72, dz: 0.28 } };
 }
+function makeShelfForPlacement() {
+  return { group: buildShelfGroup(), footprint: 3.3, collider: null, rect: { dx: SHELF_W / 2 + 0.05, dz: SHELF_D / 2 + 0.05 }, rotateStep: Math.PI / 2, isShelf: true };
+}
 const FURNITURE_FACTORY = {
   sofa: makeSofa, armchair: makeArmchair, plant: makePlant, palm: makePalm,
   coatrack: makeCoatRack, greenwall: makeGreenWall, rug: makeRug, neon: makeNeon,
+  shelf: makeShelfForPlacement,
 };
 const FURNITURE_NAMES = {
+  shelf: 'Стеллаж «Классик» (16 ячеек)',
   sofa: 'Диван «Комфорт»', armchair: 'Кресло «Тишина»', plant: 'Растение в кашпо',
   palm: 'Пальма «Марракеш»', coatrack: 'Вешалка «Зима»', greenwall: 'Фитостена «Дыши»',
   rug: 'Ковёр «Тюльпаны»', neon: 'Неоновое панно «24/7»',
@@ -2033,6 +2090,13 @@ function footprintCircleRect(fp, px, pz, r) {
   const dx = px - nx, dz = pz - nz;
   return dx * dx + dz * dz < fp * fp;
 }
+function placementValidRect(dx, dz, pos, rot) {
+  const [minX, maxX, minZ, maxZ] = rotatedColliderRect(pos.x, pos.z, dx, dz, rot);
+  if (minX < -ROOM.x + 0.3 || maxX > ROOM.x - 0.3 || minZ < -ROOM.z + 0.3 || maxZ > ROOM.z - 0.3) return false;
+  if (Math.abs(pos.x) < 2.0 && maxZ > 3.8) return false;  // зона двери (по центру предмета)
+  for (const c of colliders) if (maxX > c.minX && minX < c.maxX && maxZ > c.minZ && minZ < c.maxZ) return false;
+  return true;
+}
 function placementValid(fp, pos) {
   if (fp > 0) {
     if (pos.x < -ROOM.x + fp * 0.6 || pos.x > ROOM.x - fp * 0.6 || pos.z < -ROOM.z + fp * 0.6 || pos.z > ROOM.z - fp * 0.6) return false;
@@ -2065,7 +2129,7 @@ function enterPlacement(id) {
     ring.position.y = 0.02;
     scene.add(ring);
   }
-  G.placing = { id, rot: 0, ghost, ring, fp, valid: false };
+  G.placing = { id, rot: 0, ghost, ring, fp, rect: built.rect || null, rotateStep: built.rotateStep || Math.PI / 4, valid: false };
   buildHint.classList.remove('hidden');
   promptEl.classList.add('hidden');
 }
@@ -2079,8 +2143,8 @@ function cancelPlacement() {
 function commitPlacement() {
   const pl = G.placing;
   if (!pl || !pl.valid) { AudioSys.denied(); return; }
-  spawnFurnitureAt(pl.id, pl.ghost.position.x, pl.ghost.position.z, pl.rot);
-  placedFurniture.push({ id: pl.id, x: pl.ghost.position.x, z: pl.ghost.position.z, rot: pl.rot });
+  if (pl.id === 'shelf') makeShelf(pl.ghost.position.x, pl.ghost.position.z, pl.rot);
+  else spawnFurnitureAt(pl.id, pl.ghost.position.x, pl.ghost.position.z, pl.rot);
   const i = G.inventory.indexOf(pl.id);
   if (i >= 0) G.inventory.splice(i, 1);
   cancelPlacement();
@@ -2091,7 +2155,7 @@ function commitPlacement() {
 }
 function rotatePlacement() {
   if (!G.placing) return;
-  G.placing.rot += Math.PI / 4;
+  G.placing.rot += (G.placing.rotateStep || Math.PI / 4);
   G.placing.ghost.rotation.y = G.placing.rot;
 }
 function updatePlacement() {
@@ -2104,7 +2168,7 @@ function updatePlacement() {
     hit.z = clamp(hit.z, -ROOM.z + 0.4, ROOM.z - 0.4);
     pl.ghost.position.set(hit.x, 0, hit.z);
     if (pl.ring) pl.ring.position.set(hit.x, 0.02, hit.z);
-    pl.valid = placementValid(pl.fp, hit);
+    pl.valid = pl.rect ? placementValidRect(pl.rect.dx, pl.rect.dz, hit, pl.rot) : placementValid(pl.fp, hit);
     const mat = pl.valid ? ghostMatOk : ghostMatBad;
     pl.ghost.traverse(o => { if (o.isMesh) o.material = mat; });
     if (pl.ring) pl.ring.material = pl.valid ? ringMatOk : ringMatBad;
@@ -2115,6 +2179,225 @@ function updateInventoryHUD() {
   const count = G.inventory.length;
   btn.classList.toggle('hidden', count === 0);
   document.getElementById('inv-count').textContent = count;
+}
+
+// ============================================================
+//  Режим перестановки (M): двигаем уже стоящие предметы
+// ============================================================
+const MOVABLE_WORK = {
+  table:   { rect: { dx: 1.25, dz: 0.75 }, label: 'Стол распаковки' },
+  counter: { rect: { dx: 1.5, dz: 0.5 },   label: 'Стойка выдачи' },
+  bin:     { rect: { dx: 0.5, dz: 0.45 },  label: 'Контейнер для брака' },
+  pallet:  { rect: { dx: 1.15, dz: 0.85 }, label: 'Паллета поставки' },
+};
+function movableEntries() {
+  const list = [];
+  for (const f of placedFurniture) list.push({ kind: 'furniture', root: f.group, entry: f, fp: f.fp, rect: null, rotateStep: Math.PI / 4, label: FURNITURE_NAMES[f.id] || f.id, cid: f.cid });
+  for (const s of shelves) list.push({ kind: 'shelf', root: s.group, ref: s, rect: { dx: SHELF_W / 2 + 0.05, dz: SHELF_D / 2 + 0.05 }, rotateStep: Math.PI / 2, label: 'Стеллаж «Классик»', cid: s.cid });
+  if (layoutRefs.bench) list.push({ kind: 'bench', root: layoutRefs.bench, rect: { dx: 0.9, dz: 0.3 }, rotateStep: Math.PI / 4, label: 'Скамейка', cid: 'bench' });
+  if (layoutRefs.rugBase) list.push({ kind: 'rug', root: layoutRefs.rugBase, fp: 0, rect: null, rotateStep: Math.PI / 4, label: 'Ковёр зала', cid: null });
+  for (const k of Object.keys(MOVABLE_WORK)) {
+    const obj = layoutRefs[k];
+    if (obj) list.push({ kind: k, root: obj, rect: MOVABLE_WORK[k].rect, rotateStep: 0, label: MOVABLE_WORK[k].label, cid: k });
+  }
+  return list;
+}
+function movableFromRay() {
+  const hits = raycaster.intersectObjects(movableEntries().map(e => e.root), true);
+  if (!hits.length) return null;
+  let o = hits[0].object;
+  while (o) {
+    const found = movableEntries().find(e => e.root === o);
+    if (found) return found;
+    o = o.parent;
+  }
+  return null;
+}
+const _ghostBackup = new Map();
+function ghostify(obj) {
+  _ghostBackup.clear();
+  obj.traverse(o => { if (o.isMesh && o.material && o.material.visible !== false) { _ghostBackup.set(o, o.material); o.material = ghostMatOk; } });
+}
+function unghostify() {
+  for (const [o, m] of _ghostBackup) o.material = m;
+  _ghostBackup.clear();
+}
+function setGhostValidity(valid) {
+  for (const [o] of _ghostBackup) o.material = valid ? ghostMatOk : ghostMatBad;
+  if (G.moving && G.moving.ring) G.moving.ring.material = valid ? ringMatOk : ringMatBad;
+}
+function pickupMigrate(kind, sx, sz) {
+  if (kind === 'table') return parcels.filter(p => isTableParcel(p, sx, sz)).map(p => ({ mesh: p.mesh, x: p.mesh.position.x, z: p.mesh.position.z }));
+  if (kind === 'pallet') return bigBoxes.filter(b => Math.hypot(b.position.x - sx, b.position.z - sz) < 1.7).map(b => ({ mesh: b, x: b.position.x, z: b.position.z }));
+  if (kind === 'counter') return customers.map(c => ({ mesh: c.mesh, x: c.mesh.position.x, z: c.mesh.position.z }));
+  return [];
+}
+function applyMigrate(mv, dx, dz) {
+  if (!mv.migrate) return;
+  for (const m of mv.migrate) { m.mesh.position.x += dx; m.mesh.position.z += dz; }
+}
+function restoreMigrate(mv) {
+  if (!mv.migrate) return;
+  for (const m of mv.migrate) { m.mesh.position.x = m.x; m.mesh.position.z = m.z; }
+}
+function beginMove(entry) {
+  if (G.carried || G.action) { toast('Сначала освободите руки / дождитесь конца действия', 'warn'); return false; }
+  const obj = entry.root;
+  const saved = { x: obj.position.x, z: obj.position.z, rot: obj.rotation.y };
+  if (entry.cid) removeColliderByCid(entry.cid);
+  ghostify(obj);
+  const ringR = entry.fp && entry.fp > 0 ? entry.fp : (entry.rect ? Math.max(entry.rect.dx, entry.rect.dz) : 0.6);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(ringR * 0.75, ringR, 32), ringMatOk);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(saved.x, 0.02, saved.z);
+  scene.add(ring);
+  G.moving = {
+    kind: entry.kind, entry, obj, ring, rot: saved.rot, rotateStep: entry.rotateStep,
+    fp: entry.fp || 0, rect: entry.rect || null, valid: true, saved, last: { x: saved.x, z: saved.z },
+    migrate: pickupMigrate(entry.kind, saved.x, saved.z),
+  };
+  // стартовая точка призрака = сама вещь, чтобы не «прыгала» к курсору до первого движения мыши
+  const v = new THREE.Vector3(saved.x, 0, saved.z).project(camera);
+  mouseNDC.set(v.x, v.y);
+  buildHint.innerHTML = '✋ Перестановка: ЛКМ — поставить · <kbd>R</kbd> — повернуть · Esc — вернуть на место';
+  buildHint.classList.remove('hidden');
+  promptEl.classList.add('hidden');
+  AudioSys.place();
+  return true;
+}
+const _hitV = new THREE.Vector3();
+function updateMove() {
+  const mv = G.moving; if (!mv) return;
+  raycaster.setFromCamera(mouseNDC, camera);
+  if (!raycaster.ray.intersectPlane(groundPlane, _hitV)) return;
+  const hit = _hitV;
+  hit.x = clamp(hit.x, -ROOM.x + 0.4, ROOM.x - 0.4);
+  hit.z = clamp(hit.z, -ROOM.z + 0.4, ROOM.z - 0.4);
+  if (mv.last) applyMigrate(mv, hit.x - mv.last.x, hit.z - mv.last.z);
+  mv.last = { x: hit.x, z: hit.z };
+  mv.obj.position.set(hit.x, 0, hit.z);
+  mv.obj.rotation.y = mv.rot;
+  if (mv.ring) mv.ring.position.set(hit.x, 0.02, hit.z);
+  if (mv.kind === 'shelf') {
+    const s = mv.entry.ref; s.x = hit.x; s.z = hit.z; s.rot = mv.rot;
+    positionShelfCells(s);
+    for (const cell of s.cells) if (cell.parcel) cell.parcel.mesh.position.set(cell.x, cell.y, cell.z);
+  }
+  mv.valid = mv.rect ? placementValidRect(mv.rect.dx, mv.rect.dz, hit, mv.rot) : placementValid(mv.fp, hit);
+  setGhostValidity(mv.valid);
+}
+function rotateMove() {
+  const mv = G.moving; if (!mv) return;
+  if (!mv.rotateStep) { toast('Стойку и рабочие места нельзя поворачивать — только двигать', 'warn'); return; }
+  mv.rot += mv.rotateStep;
+}
+function moveRestoreCollider(kind, saved, entry) {
+  const rot = saved.rot;
+  if (kind === 'furniture') {
+    const f = entry.entry;
+    if (f.collider) { const [a, b, c, d] = rotatedColliderRect(saved.x, saved.z, f.collider.dx, f.collider.dz, rot); addCollider(a, b, c, d, 'furn', f.cid); }
+    return;
+  }
+  if (kind === 'bench') { const [a, b, c, d] = rotatedColliderRect(saved.x, saved.z, 0.9, 0.3, rot); addCollider(a, b, c, d, 'layout', 'bench'); return; }
+  if (kind === 'table') { const [a, b, c, d] = rotatedColliderRect(saved.x, saved.z, 1.25, 0.75, 0); addCollider(a, b, c, d, 'layout', 'table'); return; }
+  if (kind === 'counter') { addCollider(saved.x - 1.5, saved.x + 1.5, saved.z - 0.5, saved.z + 0.5, 'layout', 'counter'); return; }
+  if (kind === 'bin') { addCollider(saved.x - 0.5, saved.x + 0.5, saved.z - 0.45, saved.z + 0.45, 'layout', 'bin'); return; }
+  if (kind === 'pallet') { addCollider(saved.x - 1.15, saved.x + 1.15, saved.z - 0.85, saved.z + 0.85, 'layout', 'pallet'); return; }
+  if (kind === 'shelf') addShelfCollider(entry.ref);
+}
+function cancelMove(exitMode) {
+  const mv = G.moving; if (!mv) return;
+  unghostify();
+  if (mv.ring) scene.remove(mv.ring);
+  mv.obj.position.set(mv.saved.x, 0, mv.saved.z);
+  mv.obj.rotation.y = mv.saved.rot;
+  restoreMigrate(mv);
+  if (mv.kind === 'counter') relayoutQueue();   // меши на месте — пересчитываем цели из них
+  if (mv.kind === 'shelf') {
+    const s = mv.entry.ref; s.x = mv.saved.x; s.z = mv.saved.z; s.rot = mv.saved.rot;
+    positionShelfCells(s);
+    for (const cell of s.cells) if (cell.parcel) cell.parcel.mesh.position.set(cell.x, cell.y, cell.z);
+  }
+  if (mv.entry.cid) moveRestoreCollider(mv.kind, mv.saved, mv.entry);
+  G.moving = null;
+  buildHint.innerHTML = '✋ Режим перестановки: кликните предмет · Esc/M — выйти';
+  if (exitMode) exitMoveMode();
+}
+function commitMove() {
+  const mv = G.moving; if (!mv) return;
+  if (!mv.valid) { AudioSys.denied(); return; }
+  unghostify();
+  if (mv.ring) scene.remove(mv.ring);
+  const pos = mv.obj.position, rot = mv.rot, old = mv.saved;
+  const dRot = rot - old.rot;
+  const e = mv.entry;
+  if (mv.kind === 'furniture') {
+    const f = e.entry; f.x = pos.x; f.z = pos.z; f.rot = rot;
+    if (f.collider) { const [a, b, c, d] = rotatedColliderRect(pos.x, pos.z, f.collider.dx, f.collider.dz, rot); addCollider(a, b, c, d, 'furn', f.cid); }
+  } else if (mv.kind === 'shelf') {
+    const s = e.ref;
+    for (const cell of s.cells) if (cell.parcel) cell.parcel.mesh.rotation.y += dRot;
+    addShelfCollider(s);
+    clearBeacon();
+    parcelsDirty = true;
+  } else if (mv.kind === 'table') {
+    TABLE_POS.x = pos.x; TABLE_POS.z = pos.z;
+    const bc = rotatedColliderRect(pos.x, pos.z, 1.25, 0.75, 0);
+    addCollider(bc[0], bc[1], bc[2], bc[3], 'layout', 'table');
+    const onTable = parcels.filter(p => isTableParcel(p, mv.saved.x, mv.saved.z) || isTableParcel(p, pos.x, pos.z));
+    onTable.sort((a, b) => (a.mesh.position.z - b.mesh.position.z) || (a.mesh.position.x - b.mesh.position.x));
+    onTable.forEach((p, i) => { const slot = TABLE_SLOTS[i % TABLE_SLOTS.length]; p.mesh.position.set(TABLE_POS.x + slot.dx, 0.96, TABLE_POS.z + slot.dz); });
+    G.movedLayout.table = { x: pos.x, z: pos.z };
+    parcelsDirty = true;
+  } else if (mv.kind === 'counter') {
+    COUNTER_POS.x = pos.x; COUNTER_POS.z = pos.z;
+    COUNTER_APPROACH.x = pos.x; COUNTER_APPROACH.z = pos.z + 1.2;
+    addCollider(pos.x - 1.5, pos.x + 1.5, pos.z - 0.5, pos.z + 0.5, 'layout', 'counter');
+    if (nameBoard) nameBoard.position.set(pos.x, 2.35, pos.z);
+    if (counterGlowLight) counterGlowLight.position.set(pos.x, 2.4, pos.z);
+    if (coffeeMachineRef) coffeeMachineRef.position.set(pos.x - 1.05, 1.1, pos.z - 0.05);
+    const qd = (LAYOUTS[G.layout] && LAYOUTS[G.layout].queueDir) || 1;
+    const ax = COUNTER_APPROACH.x, az = COUNTER_APPROACH.z;
+    QUEUE_SLOTS[0].set(ax, 0, az + 0.15);
+    QUEUE_SLOTS[1].set(ax + 1.25 * qd, 0, az + 0.55);
+    QUEUE_SLOTS[2].set(ax + 2.5 * qd, 0, az + 0.75);
+    relayoutQueue();
+    G.movedLayout.counter = { x: pos.x, z: pos.z };
+  } else if (mv.kind === 'bin') {
+    BIN_POS.x = pos.x; BIN_POS.z = pos.z;
+    addCollider(pos.x - 0.5, pos.x + 0.5, pos.z - 0.45, pos.z + 0.45, 'layout', 'bin');
+    G.movedLayout.bin = { x: pos.x, z: pos.z };
+  } else if (mv.kind === 'pallet') {
+    PALLET_POS.x = pos.x; PALLET_POS.z = pos.z;
+    addCollider(pos.x - 1.15, pos.x + 1.15, pos.z - 0.85, pos.z + 0.85, 'layout', 'pallet');
+    G.movedLayout.pallet = { x: pos.x, z: pos.z };
+  } else if (mv.kind === 'bench') {
+    const bc = rotatedColliderRect(pos.x, pos.z, 0.9, 0.3, rot);
+    addCollider(bc[0], bc[1], bc[2], bc[3], 'layout', 'bench');
+    G.movedLayout.bench = { x: pos.x, z: pos.z, rot };
+  } else if (mv.kind === 'rug') {
+    G.movedLayout.rug = { x: pos.x, z: pos.z, rot };
+  }
+  G.moving = null;
+  exitMoveMode();
+  AudioSys.build();
+  parcelsDirty = true;
+}
+function exitMoveMode() {
+  G.moveMode = false;
+  G.moving = null;
+  buildHint.classList.add('hidden');
+  canvas.style.cursor = '';
+}
+function toggleMoveMode() {
+  if (G.screen !== 'play') return;
+  if (G.placing) return;
+  if (G.moving) { cancelMove(true); return; }
+  if (G.moveMode) { exitMoveMode(); return; }
+  if (G.carried || G.action) { toast('Сначала освободите руки / дождитесь конца действия', 'warn'); return; }
+  G.moveMode = true;
+  buildHint.innerHTML = '✋ Режим перестановки: кликните предмет · Esc/M — выйти';
+  buildHint.classList.remove('hidden');
 }
 
 // ============================================================
@@ -2275,12 +2558,16 @@ function applyRoomTint(idx) {
 //  Планировки зала (3D): разные расстановки, выбираются игроком
 // ============================================================
 function buildRugBase(L) {
+  const g = new THREE.Group();
   const m = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 2.2), new THREE.MeshLambertMaterial({ map: TEX.rug() }));
   m.rotation.x = -Math.PI / 2;
-  m.position.set(L.rug.x, 0.015, L.rug.z);
+  m.position.y = 0.015;
   m.receiveShadow = true;
-  world.add(m);
-  layoutRefs.rugBase = m;
+  g.add(m);
+  g.position.set(L.rug.x, 0, L.rug.z);
+  g.rotation.y = L.rug.rot || 0;
+  world.add(g);
+  layoutRefs.rugBase = g;
 }
 function buildBench(L) {
   const g = new THREE.Group();
@@ -2289,8 +2576,10 @@ function buildBench(L) {
   for (const sx of [-0.68, 0.68]) { const leg = boxMesh(0.12, 0.46, 0.5, 0x6b4a2f); leg.position.set(sx, 0.23, 0); g.add(leg); }
   for (const sx of [-0.68, 0.68]) { const post = boxMesh(0.09, 0.36, 0.09, 0x6b4a2f); post.position.set(sx, 0.68, -0.235); g.add(post); }
   g.position.set(L.bench.x, 0, L.bench.z);
+  g.rotation.y = L.bench.rot || 0;
   world.add(g);
-  addCollider(L.bench.x - 0.9, L.bench.x + 0.9, L.bench.z - 0.3, L.bench.z + 0.3, 'layout');
+  const bc = rotatedColliderRect(L.bench.x, L.bench.z, 0.9, 0.3, L.bench.rot || 0);
+  addCollider(bc[0], bc[1], bc[2], bc[3], 'layout', 'bench');
   layoutRefs.bench = g;
 }
 function buildLayoutObjects() {
@@ -2314,9 +2603,19 @@ function clearLayoutObjects() {
     layoutRefs[key] = null;
   }
 }
+function mergedLayout(L, ov) {
+  const o = Object.assign({}, L);
+  if (ov) {
+    for (const k of ['table', 'bin', 'counter', 'pallet']) if (ov[k]) o[k] = { x: +ov[k].x || 0, z: +ov[k].z || 0 };
+    if (ov.bench && L.bench) o.bench = { x: +ov.bench.x || 0, z: +ov.bench.z || 0, rot: +ov.bench.rot || 0 };
+    if (ov.rug && L.rug) o.rug = { x: +ov.rug.x || 0, z: +ov.rug.z || 0, rot: +ov.rug.rot || 0 };
+  }
+  return o;
+}
 function applyLayout(idx) {
-  const L = LAYOUTS[idx];
-  if (!L) return;
+  const base = LAYOUTS[idx];
+  if (!base) return;
+  const L = mergedLayout(base, G.movedLayout);
   G.layout = idx;
   const oldTable = { x: TABLE_POS.x, z: TABLE_POS.z };
   TABLE_POS.x = L.table.x; TABLE_POS.z = L.table.z;
@@ -2449,9 +2748,9 @@ function closeLocations() {
 // ============================================================
 const SHOP_ITEMS = [
   // Мебель (размещается игроком)
-  { id: 'shelf', sec: 'Мебель', ico: '🗄️', name: 'Стеллаж «Классик»', desc: '+8 ячеек для заказов. Ставится вдоль стены автоматически. До 4 шт.',
+  { id: 'shelf', sec: 'Мебель', ico: '🗄️', name: 'Стеллаж «Классик»', desc: '+16 ячеек для заказов. Ставите сами в любое место, поворот R. До 4 шт.',
     price: () => 700, once: false, canBuy: () => G.upgrades.shelf < 4, ownedLabel: () => G.upgrades.shelf + '/4',
-    buy() { addShelf(G.upgrades.shelf); G.upgrades.shelf++; } },
+    buy() { G.inventory.push('shelf'); G.upgrades.shelf++; } },
   { id: 'sofa', sec: 'Мебель', ico: '🛋️', name: 'Диван «Комфорт»', desc: 'Терпение клиентов +35%. Устанавливается вами.',
     price: () => 800, once: true, placeable: true },
   { id: 'armchair', sec: 'Мебель', ico: '💺', name: 'Кресло «Тишина»', desc: 'Терпение +12%. Полностью ваше. (Лимит: 3 шт.)',
@@ -2482,17 +2781,19 @@ const SHOP_ITEMS = [
 const shopGrid = document.getElementById('shop-grid');
 const shopMoney = document.getElementById('shop-money');
 const placedFurniture = [];
+let furnitureUid = 0;
 function spawnFurnitureAt(id, x, z, rot) {
   const built = FURNITURE_FACTORY[id]();
   built.group.position.set(x, 0, z);
   built.group.rotation.y = rot;
   world.add(built.group);
+  const cid = 'furn' + (furnitureUid++);
   if (built.collider) {
     const c = built.collider;
-    const cos = Math.abs(Math.cos(rot)), sin = Math.abs(Math.sin(rot));
-    const ex = c.dx * cos + c.dz * sin, ez = c.dx * sin + c.dz * cos;
-    addCollider(x - ex, x + ex, z - ez, z + ez);
+    const [a, b, c2, d] = rotatedColliderRect(x, z, c.dx, c.dz, rot);
+    addCollider(a, b, c2, d, 'furn', cid);
   }
+  placedFurniture.push({ id, x, z, rot, group: built.group, fp: built.footprint || 0, collider: built.collider || null, cid });
   return built;
 }
 const boughtCounts = {};
@@ -3167,7 +3468,7 @@ function nearBulkyRack() {
 }
 
 function getInteraction() {
-  if (G.action || G.placing) return null;
+  if (G.action || G.placing || G.moveMode) return null;
   const px = player.position.x, pz = player.position.z;
   const nearCounter = nearCounterDist() < 2.15;
   const nearTable = Math.hypot(px - TABLE_POS.x, pz - TABLE_POS.z) < 2.2;
@@ -3568,7 +3869,7 @@ function attachCarriedToPlayerCheck() {} // (оставлено для совм�
 // ============================================================
 const keys = {};
 function doInteract() {
-  if (G.screen !== 'play' || G.placing) return;
+  if (G.screen !== 'play' || G.placing || G.moveMode) return;
   const it = getInteraction();
   if (it) it.action();
 }
@@ -3576,7 +3877,9 @@ window.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
   if (e.code === 'KeyE') doInteract();
-  if (e.code === 'KeyR' && G.placing) rotatePlacement();
+  if (e.code === 'KeyM') toggleMoveMode();
+  if (e.code === 'KeyR' && G.moving) rotateMove();
+  else if (e.code === 'KeyR' && G.placing) rotatePlacement();
   if (e.code === 'KeyB') {
     if (G.placing) return;
     if (G.screen === 'play' || G.screen === 'dayEnd') openShop();
@@ -3584,6 +3887,8 @@ window.addEventListener('keydown', e => {
   }
   if (e.code === 'KeyN') toggleBreak();
   if (e.code === 'Escape') {
+    if (G.moving) { cancelMove(true); return; }
+    if (G.moveMode) { exitMoveMode(); return; }
     if (G.placing) { cancelPlacement(); return; }
     if (G.screen === 'shop') closeShop();
     else if (G.screen === 'locations') closeLocations();
@@ -3600,9 +3905,26 @@ canvas.addEventListener('wheel', e => {
 canvas.addEventListener('pointermove', e => {
   const rect = canvas.getBoundingClientRect();
   mouseNDC.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  if (G.moveMode && !G.moving && !isTouchMode) {
+    raycaster.setFromCamera(mouseNDC, camera);
+    canvas.style.cursor = movableFromRay() ? 'pointer' : '';
+  }
 });
 canvas.addEventListener('pointerdown', e => {
   if (G.screen !== 'play') return;
+  if (G.moveMode) {
+    if (e.button === 2) { if (G.moving) cancelMove(true); else exitMoveMode(); return; }
+    if (e.pointerType === 'touch' || e.button === 0) {
+      if (G.moving) { commitMove(); return; }
+      const rect2 = canvas.getBoundingClientRect();
+      mouseNDC.set(((e.clientX - rect2.left) / rect2.width) * 2 - 1, -((e.clientY - rect2.top) / rect2.height) * 2 + 1);
+      raycaster.setFromCamera(mouseNDC, camera);
+      const entry = movableFromRay();
+      if (entry) beginMove(entry);
+      else toast('Здесь нечего двигать — подойдите ближе', 'warn');
+    }
+    return;
+  }
   if (G.placing) {
     if (e.button === 2) { cancelPlacement(); return; }
     if (e.pointerType === 'touch' || e.button === 0) commitPlacement();
@@ -3684,6 +4006,7 @@ btnTouchE.addEventListener('pointerdown', e => { e.preventDefault(); doInteract(
 
 // Кнопки UI
 document.getElementById('btn-shop').addEventListener('click', () => { if (G.screen === 'play') openShop(); });
+document.getElementById('btn-move').addEventListener('click', () => toggleMoveMode());
 document.getElementById('btn-break').addEventListener('click', toggleBreak);
 document.getElementById('btn-loc').addEventListener('click', () => { if (G.screen === 'play') openLocations(); });
 document.getElementById('btn-pause').addEventListener('click', () => { if (G.screen === 'play') { G.screen = 'pause'; document.getElementById('pause').classList.remove('hidden'); } });
@@ -3914,6 +4237,7 @@ function updateGameplay(dt) {
   updateThermal(dt);
   updateLoader(dt);
   updatePlacement();
+  updateMove();
   const it = getInteraction();
   if (it && !G.action && !G.placing) {
     promptEl.classList.remove('hidden');
@@ -3988,7 +4312,7 @@ buildBulkyRack();
 buildFridge();
 buildWC();
 applyLayout(G.layoutsByLoc['metro'] != null ? G.layoutsByLoc['metro'] : 0);
-addShelf(0);
+makeShelf(DEFAULT_SHELF_SPOTS[0].x, DEFAULT_SHELF_SPOTS[0].z, DEFAULT_SHELF_SPOTS[0].rot);
 
 // Загрузочный экран: честно отрабатываем шаги и держим минимум 1.2 с
 const bootFill = document.getElementById('boot-fill');
@@ -4083,6 +4407,30 @@ window.PVZ.debugFillTable = function (n) {
 };
 window.PVZ.debugSpawnUnpacked = function () { spawnUnpackedParcels(); return parcels.length; };
 window.PVZ.debugSetCameraDist = function (v) { cameraDist = v; };
+window.PVZ.debugBeginMove = function (kind) { const e = movableEntries().find(x => x.kind === kind); return e ? beginMove(e) : false; };
+window.PVZ.debugMoveTo = function (x, z) {
+  const mv = G.moving; if (!mv) return false;
+  const cx = clamp(x, -ROOM.x + 0.4, ROOM.x - 0.4), cz = clamp(z, -ROOM.z + 0.4, ROOM.z - 0.4);
+  if (mv.last) applyMigrate(mv, cx - mv.last.x, cz - mv.last.z);
+  mv.last = { x: cx, z: cz };
+  mv.obj.position.set(cx, 0, cz);
+  mv.obj.rotation.y = mv.rot;
+  if (mv.ring) mv.ring.position.set(cx, 0.02, cz);
+  if (mv.kind === 'shelf') {
+    const s = mv.entry.ref; s.x = cx; s.z = cz; s.rot = mv.rot;
+    positionShelfCells(s);
+    for (const cell of s.cells) if (cell.parcel) cell.parcel.mesh.position.set(cell.x, cell.y, cell.z);
+  }
+  const p = { x: cx, z: cz };
+  mv.valid = mv.rect ? placementValidRect(mv.rect.dx, mv.rect.dz, p, mv.rot) : placementValid(mv.fp, p);
+  return { x: cx, z: cz, valid: mv.valid };
+};
+window.PVZ.debugRotateMove = rotateMove;
+window.PVZ.debugCommitMove = commitMove;
+window.PVZ.debugCancelMove = cancelMove;
+window.PVZ.debugToggleMove = toggleMoveMode;
+window.PVZ.debugMoving = function () { return { moveMode: G.moveMode, moving: !!G.moving, kind: G.moving ? G.moving.kind : null, valid: G.moving ? G.moving.valid : null }; };
+window.PVZ.debugPlaced = function () { return placedFurniture.map(f => ({ id: f.id, x: +f.x.toFixed(2), z: +f.z.toFixed(2), rot: +f.rot.toFixed(2) })); };
 window.PVZ.debugSpawnParcel = function (type, x, z) {
   const p = spawnParcel(x == null ? TABLE_POS.x : x, z == null ? TABLE_POS.z : z, 0, type || null);
   p.mesh.position.y = type === 'defect' ? 0 : 0;

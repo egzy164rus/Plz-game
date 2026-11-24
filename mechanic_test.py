@@ -16,11 +16,11 @@ with sync_playwright() as p:
     page.wait_for_timeout(2500)
     page.evaluate("window.PVZ.G.customerTimer = 9999")
 
-    # --- 1) 8 ячеек на стеллаж, посылка меньше прежней (0.5×0.34×0.4)
+    # --- 1) 16 ячеек на стеллаж, посылка меньше прежней (0.5×0.34×0.4)
     cells = page.evaluate("window.PVZ.shelves.flatMap(s => s.cells).length")
     bbox = page.evaluate("""() => { const id = window.PVZ.debugSpawnParcel('normal', -4.4, -0.9); const par = window.PVZ.parcels.find(q => q.id === id); par.mesh.rotation.set(0, 0, 0); par.mesh.children[0].rotation.set(0, 0, 0); const b = new window.THREE.Box3().setFromObject(par.mesh.children[0]); return { w: +(b.max.x-b.min.x).toFixed(2), h: +(b.max.y-b.min.y).toFixed(2) }; }""")
     print("cells:", cells, "| parcel body bbox:", bbox)
-    assert cells == 8 and bbox['w'] < 0.42 and bbox['h'] < 0.3, (cells, bbox)
+    assert cells == 16 and bbox['w'] < 0.42 and bbox['h'] < 0.3, (cells, bbox)
 
     # --- 2) экспресс: единственный в ячейке ⇒ клиент просит именно его, терпение ×0.65
     page.evaluate("window.PVZ.debugClearParcels()")
