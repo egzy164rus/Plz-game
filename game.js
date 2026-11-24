@@ -119,6 +119,8 @@ const BALANCE = {
   fastIssueSec: 12, tipComboBase: 25, tipComboMax: 4,
   expressChance: 0.12, expressPayMul: 1.5, expressPatienceMul: 0.65,
   vipChance: 0.10, vipPayMul: 2.2, vipPatienceMul: 0.6,
+  corpChance: 0.08, corpPatienceMul: 1.6, corpPayMul: 1.25, corpRepMul: 1.5,
+  cardboardPrice: 8,
   repGain: 0.04,
   repLoss: 0.18,
   scanTime: 1.2,
@@ -183,6 +185,7 @@ const G = {
   dayEarned: 0,
   issuedToday: 0,
   tipsToday: 0, tipCombo: 0,
+  cardboard: 0,
   angryToday: 0,
   totalIssued: 0,
   carried: null,
@@ -239,7 +242,9 @@ const genOrderId = () => {
 const locBonus = () => LOCATIONS.find(l => l.id === G.location) || LOCATIONS[0];
 const layoutStats = () => (LAYOUTS[G.layout] && LAYOUTS[G.layout].stats) || { check: 1, patience: 1, stream: 1, rep: 1 };
 const cellLoc = cell => cell ? `Стеллаж ${cell.shelf + 1} · ячейка ${cell.row === 0 ? 'A' : 'B'}${cell.col + 1}` : '—';
+const cellShort = cell => cell ? `С${cell.shelf + 1}·${cell.row === 0 ? 'A' : 'B'}${cell.col + 1}` : '—';
 const TABLE_POS = { x: -4.4, z: -0.9 };
+const CARDBOARD_POS = { x: TABLE_POS.x + 1.62, z: TABLE_POS.z + 0.42 };  // стопка расплющенных коробов у стола
 const BIN_POS = { x: -6.6, z: 3.7 };
 const COUNTER_POS = { x: 4.0, z: 2.4 };
 const COUNTER_APPROACH = { x: 4.0, z: 3.6 };
@@ -325,6 +330,7 @@ function collectSave() {
     boughtCounts: { ...boughtCounts },
     furniture: placedFurniture.map(f => ({ id: f.id, x: +f.x.toFixed(2), z: +f.z.toFixed(2), rot: f.rot })),
     shelves: shelves.length,
+    cardboard: G.cardboard || 0,
     parcels: pdata,
     bigBoxes: bigBoxes.map(b => { const fi = floorItems.find(i => i.mesh === b); return { docScanned: !!(fi && fi.docScanned) }; }),
     carried,
@@ -349,6 +355,8 @@ function applySave(sp) {
   Object.assign(boughtCounts, sp.boughtCounts || {});
   // стеллажи: 0-й построен при загрузке мира — достраиваем остальные
   for (let i = shelves.length; i < (sp.shelves || 1); i++) addShelf(i);
+  G.cardboard = sp.cardboard || 0;
+  for (let i = 0; i < Math.min(G.cardboard, 6); i++) spawnCardboardFlat();
   // размещённая мебель
   for (const f of sp.furniture || []) spawnFurnitureAt(f.id, f.x, f.z, f.rot || 0);
   // посылки
@@ -1732,6 +1740,14 @@ function spawnCustomer() {
   const parcel = choice(stored);
   parcel.reservedBy = 'pending';
   const isVip = Math.random() < BALANCE.vipChance;
+  // корпоративный клиент: два заказа разом (не VIP одновременно)
+  let isCorp = false;
+  let corpExtra = null;
+  if (!isVip && Math.random() < BALANCE.corpChance) {
+    const extras = stored.filter(p => p !== parcel && p.reservedBy == null);
+    if (extras.length) { corpExtra = choice(extras); corpExtra.reservedBy = 'pending'; isCorp = true; }
+  }
+  const wanted = [parcel].concat(corpExtra ? [corpExtra] : []);
 
   const mesh = makePerson({ body: choice(BODY), skin: choice(SKIN), pants: choice([0x2b233c, 0x3a4a63, 0x4a3b2f]), scale: rand(0.92, 1.08), hair: choice(HAIR) });
   const sx = rand(-0.9, 0.9);
@@ -1745,12 +1761,13 @@ function spawnCustomer() {
     * locBonus().patience
     * layoutStats().patience
     * (isVip ? BALANCE.vipPatienceMul : 1)
+    * (isCorp ? BALANCE.corpPatienceMul : 1)
     * (parcel.type === 'express' ? BALANCE.expressPatienceMul : 1);
 
-  const b = makeBubble(isVip ? '👑 VIP · Покажите QR' : '📱 Покажите QR', isVip ? 'vip' : null);
+  const b = makeBubble(isCorp ? '🏢 Юр. лица ×2 · Покажите QR' : isVip ? '👑 VIP · Покажите QR' : '📱 Покажите QR', isVip ? 'vip' : null);
 
   const customer = {
-    mesh, parcel, isReturn: false, slot: queueIndex, isVip,
+    mesh, parcel, parcels: wanted, isReturn: false, slot: queueIndex, isVip, isCorp,
     state: 'entering', qrScanned: false,
     patience: patienceMax, patienceMax,
     bubble: b.div, bubbleBar: b.bar, bubbleTitle: b.title,
@@ -1758,7 +1775,7 @@ function spawnCustomer() {
     waypoints: [new THREE.Vector3(sx * 0.4, 0, ROOM.z - 0.4), QUEUE_SLOTS[queueIndex].clone()],
     wpIndex: 0,
   };
-  parcel.reservedBy = customer;
+  for (const wp of wanted) wp.reservedBy = customer;
   customers.push(customer);
   tagInteract(mesh, 'customer', { customer });
   relayoutQueue();
@@ -1817,7 +1834,8 @@ function customerLeave(c, mood, penaltyMul = 1) {
     G.angryToday++;
     toast('Клиент ушёл недовольным… −репутация', 'bad');
     AudioSys.angry();
-    if (c.parcel && c.parcel.reservedBy === c) c.parcel.reservedBy = null;
+    if (c.parcels) for (const wp of c.parcels) if (wp.reservedBy === c) wp.reservedBy = null;
+    else if (c.parcel && c.parcel.reservedBy === c) c.parcel.reservedBy = null;
   }
 }
 function updateCustomers(dt) {
@@ -1862,7 +1880,11 @@ function removeCustomer(c) {
   relayoutQueue();
 }
 function servedCustomerAtCounter(parcelId) {
-  return customers.find(c => c.state !== 'leaving' && !c.isReturn && c.parcel && c.parcel.id === parcelId);
+  return customers.find(c => c.state !== 'leaving' && !c.isReturn && (
+    (c.parcel && c.parcel.id === parcelId) ||
+    // корпоративный заказ: ждём ещё не выданные посылки из wanted
+    (G.activeOrder && G.activeOrder.customer === c && (G.activeOrder.wanted || []).some(p => p.id === parcelId))
+  ));
 }
 function waitingReturner() {
   return customers.find(c => c.state === 'waiting' && c.isReturn);
@@ -1903,15 +1925,19 @@ function finishQr() {
   if (!customer || !customers.includes(customer) || customer.state === 'leaving') { updateHUD(); return; }
   customer.qrScanned = true;
   const parcel = customer.parcel;
-  if (customer.bubbleTitle) customer.bubbleTitle.textContent = (customer.isVip ? '👑 ' : '') + '📦 ' + parcel.id;
   // Карточка заказа + маяк над нужной ячейкой
-  G.activeOrder = { customer, parcel, qrAt: performance.now() };
+  const wantedParcels = customer.parcels || [parcel];
+  if (customer.bubbleTitle) customer.bubbleTitle.textContent = (customer.isVip ? '👑 ' : customer.isCorp ? '🏢 ' : '') + '📦 ' + wantedParcels.map(p => p.id).join(' + ');
+  G.activeOrder = { customer, wanted: wantedParcels.slice(), parcel: wantedParcels[0], qrAt: performance.now() };
   const oc = document.getElementById('order-card');
   oc.classList.remove('hidden');
-  document.getElementById('oc-id').textContent = parcel.id;
-  document.getElementById('oc-cell').innerHTML = cellLoc(parcel.cell);
+  const ocParcel = wantedParcels[0];
+  document.getElementById('oc-id').textContent = wantedParcels.map(p => p.id).join(' + ');
+  document.getElementById('oc-cell').innerHTML = wantedParcels.length > 1
+    ? `<b>Юр. лица ×${wantedParcels.length}:</b> ${wantedParcels.map(p => cellShort(p.cell)).join(' + ')}`
+    : cellLoc(ocParcel.cell);
   if (parcel.cell) setBeacon(parcel.cell);
-  toast(`QR ✓ Заказ ${parcel.id} — ${cellLoc(parcel.cell)}`, 'good');
+  toast(wantedParcels.length > 1 ? `QR ✓ Юр. лица: ${wantedParcels.map(p => p.id).join(' + ')}` : `QR ✓ Заказ ${parcel.id} — ${cellLoc(parcel.cell)}`, 'good');
   AudioSys.qr();
   updateHUD();
 }
@@ -1945,11 +1971,16 @@ function updateOrderCard() {
   const frac = clamp(c.patience / c.patienceMax, 0, 1);
   ocFill.style.width = (frac * 100) + '%';
   orderCard.classList.toggle('critical', frac < 0.25);
-  if (G.carried && G.carried.parcel === o.parcel) {
-    ocCell.innerHTML = 'Посылка у вас — <b>несите на стойку</b>';
+  const wantedList = o.wanted || [o.parcel];
+  if (G.carried && wantedList.includes(G.carried.parcel)) {
+    ocCell.innerHTML = wantedList.length > 1
+      ? `<b>Юр. лица ×${wantedList.length}:</b> осталось взять ${wantedList.map(p => p.id).join(' + ')}`
+      : 'Посылка у вас — <b>несите на стойку</b>';
     clearBeacon();
   } else if (o.parcel.cell) {
-    ocCell.innerHTML = cellLoc(o.parcel.cell);
+    ocCell.innerHTML = wantedList.length > 1
+      ? `<b>Юр. лица ×${wantedList.length}:</b> ${wantedList.map(p => cellShort(p.cell)).join(' + ')}`
+      : cellLoc(o.parcel.cell);
     if (!G.beacon) setBeacon(o.parcel.cell);
   } else if (o.parcel.bulkySlot != null) {
     ocCell.innerHTML = '<b>Габарит · Стойка у входа</b>';
@@ -2782,6 +2813,35 @@ function finishTtn() {
 const PARCEL_ROW = [-0.62, 0, 0.62]; // legacy, оставлено для совместимости
 // Сетка мест на столе (2 ряда × 3 колонки) и полосы на полу — куда класть посылки,
 // чтобы они не сливались в одну точку при повторной приёмке
+// Картон от вскрытых коробов: складываем стопкой на столе, сдаём за деньги
+const cardboardFlats = [];
+function spawnCardboardFlat() {
+  if (cardboardFlats.length >= 6) return;
+  const flat = boxMesh(0.66, 0.07, 0.46, 0xc8a06a, { roughness: 0.9 });
+  flat.position.set(CARDBOARD_POS.x + rand(-0.05, 0.05), 0.05 + cardboardFlats.length * 0.075 + 0.035, CARDBOARD_POS.z + rand(-0.05, 0.05));
+  flat.rotation.y = rand(-0.18, 0.18);
+  flat.castShadow = true;
+  tagInteract(flat, 'cardboard');
+  world.add(flat);
+  cardboardFlats.push(flat);
+}
+function despawnCardboardFlat() {
+  const flat = cardboardFlats.pop();
+  if (flat) { untagInteract(flat); if (flat.parent) flat.parent.remove(flat); }
+}
+function startCardboard() {
+  if (G.cardboard <= 0 || G.carried || G.action) return;
+  beginTimed('cardboard', 0.8, 'Сдаём картон…');
+}
+function finishCardboard() {
+  G.action = null;
+  document.getElementById('scan-progress').classList.add('hidden');
+  G.cardboard = Math.max(0, (G.cardboard || 0) - 1);
+  despawnCardboardFlat();
+  G.money += BALANCE.cardboardPrice; G.dayEarned += BALANCE.cardboardPrice; G.lifetimeEarned += BALANCE.cardboardPrice;
+  toast(`♻️ Картон сдан · +${BALANCE.cardboardPrice} ₽${G.cardboard ? ` (осталось: ${G.cardboard})` : ''}`, 'good');
+  AudioSys.place();
+}
 const TABLE_SLOTS = [];
 for (const dz of [-0.28, 0.28]) for (const dx of [-0.93, -0.31, 0.31, 0.93]) TABLE_SLOTS.push({ dx, dz });
 function isTableParcel(p, tx, tz) {
@@ -2836,6 +2896,8 @@ function spawnUnpackedParcels() {
     p.mesh.rotation.y = rand(-0.12, 0.12);
     spawned.push(p);
   }
+  G.cardboard = (G.cardboard || 0) + 1;
+  spawnCardboardFlat();
   const defects = spawned.filter(p => p.type === 'defect').length;
   const thermal = spawned.filter(p => p.type === 'thermal').length;
   const bulky = spawned.filter(p => p.type === 'bulky').length;
@@ -2874,7 +2936,8 @@ function finishScan() {
   const loc = locBonus();
   const typeMul = parcel.type === 'fragile' ? BALANCE.fragilePayMul : parcel.type === 'thermal' ? BALANCE.thermalPayMul : parcel.type === 'bulky' ? BALANCE.bulkyPayMul : parcel.type === 'express' ? BALANCE.expressPayMul : 1;
   const vipMul = customer && customer.isVip ? BALANCE.vipPayMul : 1;
-  const payout = Math.round((BALANCE.basePay + Math.random() * BALANCE.payRandom + (G.upgrades.coffee && Math.random() < BALANCE.tipChance ? BALANCE.tipAmount : 0)) * typeMul * vipMul * loc.pay * layoutStats().check);
+  const corpMul = customer && customer.isCorp ? BALANCE.corpPayMul : 1;
+  const payout = Math.round((BALANCE.basePay + Math.random() * BALANCE.payRandom + (G.upgrades.coffee && Math.random() < BALANCE.tipChance ? BALANCE.tipAmount : 0)) * typeMul * vipMul * corpMul * loc.pay * layoutStats().check);
   // чаевые за скорость выдачи + комбо-серия
   const dtIssue = G.activeOrder && G.activeOrder.qrAt ? (performance.now() - G.activeOrder.qrAt) / 1000 : 999;
   let tip = 0;
@@ -2897,13 +2960,30 @@ function finishScan() {
     * (G.upgrades.poster ? 1.5 : 1)
     * (G.upgrades.palm ? 1.1 : 1)
     * (G.upgrades.rug ? 1.15 : 1)
-    * G.mods.repGain * loc.repGain * layoutStats().rep;
+    * G.mods.repGain * loc.repGain * layoutStats().rep
+    * (customer && customer.isCorp ? BALANCE.corpRepMul : 1);
   addRep(repGain);
   toast(`${customer && customer.isVip ? '👑 ' : ''}Выдано ${parcel.id} · +${payout} ₽`, 'good');
   if (tip > 0) toast(`⚡ Чаевые +${tip} ₽${G.tipCombo >= 2 ? ` · комбо ×${Math.min(G.tipCombo, BALANCE.tipComboMax)}` : ''}`, 'good');
   updateComboChip();
   AudioSys.scan();
   setTimeout(() => AudioSys.cash(), 180);
+
+  // корпоративный заказ: клиент ждёт вторую посылку — карточку не закрываем
+  const order = G.activeOrder;
+  if (customer && customer.isCorp && order && order.wanted) {
+    const i = order.wanted.findIndex(p => p.id === parcel.id);
+    if (i >= 0) order.wanted.splice(i, 1);
+    if (order.wanted.length > 0) {
+      order.parcel = order.wanted[0];
+      if (customer.bubbleTitle) customer.bubbleTitle.textContent = `🏢 Осталось: ${order.wanted.map(p => p.id).join(' + ')}`;
+      updateOrderCard();
+      toast(`🏢 Юр. лица: осталось выдать ${order.wanted.length} — ${order.wanted[0].id}`, 'warn');
+      G.action = null;
+      document.getElementById('scan-progress').classList.add('hidden');
+      return;
+    }
+  }
 
   clearOrderCard();
   if (customer && customer.state !== 'leaving') customerLeave(customer, 'served');
@@ -3014,9 +3094,14 @@ function handleWorldClick(root) {
       } else toast('Большие короба — на стол', 'warn');
       break;
     }
+    case 'cardboard':
+      if (G.carried || (G.cardboard || 0) <= 0) { toast('Здесь складываем расплющенные короба', 'warn'); return; }
+      smartAct(new THREE.Vector3(CARDBOARD_POS.x, 0, CARDBOARD_POS.z), 1.5, startCardboard);
+      break;
     case 'table':
       if (G.carried && G.carried.kind === 'big') smartAct(new THREE.Vector3(TABLE_POS.x, 0, TABLE_POS.z), 1.85, () => G.carried.docScanned ? startUnpack() : startTtn());
       else if (G.carried && G.carried.parcel && G.carried.parcel.type === 'defect') smartAct(new THREE.Vector3(TABLE_POS.x, 0, TABLE_POS.z), 1.85, repackageCarried);
+      else if (!G.carried && (G.cardboard || 0) > 0) smartAct(new THREE.Vector3(CARDBOARD_POS.x, 0, CARDBOARD_POS.z), 1.5, startCardboard);
       else toast('Сюда — короба с поставкой и брак', 'warn');
       break;
     case 'bin':
@@ -3115,6 +3200,7 @@ function getInteraction() {
       const scanned = customers.find(c => c.state === 'waiting' && !c.isReturn && c.qrScanned && c.parcel);
       if (scanned) return { label: `Клиент ждёт ${scanned.parcel.id} · ${cellLoc(scanned.parcel.cell)}`, soft: true, action: () => toast('Несите посылку на стойку', 'warn') };
     }
+    if (G.cardboard > 0 && Math.hypot(px - CARDBOARD_POS.x, pz - CARDBOARD_POS.z) < 1.5) return { label: `Сдать картон (+${BALANCE.cardboardPrice} ₽)`, action: startCardboard };
     const big = nearestFloorItem('big');
     if (big.item && big.dist < 1.7) return { label: 'Поднять короб (внутри 3 посылки)', action: () => pickupFloorItem(big.item) };
     const par = nearestFloorItem('parcel');
@@ -3742,6 +3828,7 @@ function updateAction(dt) {
     else if (G.action.type === 'ttn') finishTtn();
     else if (G.action.type === 'return') finishReturn();
     else if (G.action.type === 'qr') finishQr();
+    else if (G.action.type === 'cardboard') finishCardboard();
   }
 }
 function updateDeliveries(dt) {
@@ -3958,6 +4045,7 @@ nameInput.addEventListener('input', () => { G.pvzName = nameInput.value.trim() |
 buildNameBoard(G.pvzName, G.pvzLogo);
 function startNewGame(slot) {
   G.saveSlot = slot;
+  G.cardboard = 0;
   G.pvzName = (nameInput.value || 'У Дома').trim().slice(0, 14) || 'У Дома';
   G.pvzLogo = selectedLogo;
   saveBrand();
