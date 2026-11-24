@@ -1,5 +1,7 @@
-// ПВЗ: С Нуля — service worker (cache-first, версия кэша при каждом релизе)
-const CACHE = 'pvz-v1';
+// ПВЗ: С Нуля — service worker
+// Всё своё: сеть в приоритете, кэш — только как офлайн-запасной вариант.
+// Так новые версии долетают сразу, без «очистки сайта». При релизе бампать CACHE.
+const CACHE = 'pvz-v2';
 const PRECACHE = [
   './',
   'index.html',
@@ -34,19 +36,18 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;   // внешние ресурсы — сеть
+  if (url.origin !== self.location.origin) return;
   event.respondWith(
-    caches.match(request, { ignoreSearch: true }).then(cached => {
+    fetch(request).then(response => {
+      if (response && response.ok) {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(request, copy));
+      }
+      return response;
+    }).catch(() => caches.match(request, { ignoreSearch: true }).then(cached => {
       if (cached) return cached;
-      return fetch(request).then(response => {
-        if (response && response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE).then(cache => cache.put(request, copy));
-        }
-        return response;
-      }).catch(() =>
-        request.mode === 'navigate' ? caches.match('index.html') : Promise.reject('offline')
-      );
-    })
+      if (request.mode === 'navigate') return caches.match('index.html');
+      return Response.error();
+    }))
   );
 });
