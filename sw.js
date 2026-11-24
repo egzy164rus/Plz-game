@@ -1,7 +1,7 @@
 // ПВЗ: С Нуля — service worker
 // Всё своё: сеть в приоритете, кэш — только как офлайн-запасной вариант.
 // Так новые версии долетают сразу, без «очистки сайта». При релизе бампать CACHE.
-const CACHE = 'pvz-v3';
+const CACHE = 'pvz-v4';
 const PRECACHE = [
   './',
   'index.html',
@@ -9,6 +9,15 @@ const PRECACHE = [
   'game.js',
   'manifest.webmanifest',
   'vendor/three.min.js',
+  'vendor/roundedbox.js',
+  'vendor/fonts/manrope-cyrillic.woff2',
+  'vendor/fonts/manrope-latin.woff2',
+  'assets/textures/floor_color.jpg',
+  'assets/textures/floor_normal.png',
+  'assets/textures/floor_rough.jpg',
+  'assets/textures/wall_color.jpg',
+  'assets/textures/wall_normal.png',
+  'assets/textures/wall_rough.jpg',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',

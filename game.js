@@ -7,6 +7,39 @@
    ============================================================ */
 'use strict';
 
+const HIT_MAT = new THREE.MeshBasicMaterial({ visible: false });
+const HIT_BOX = new THREE.BoxGeometry(0.72, 0.72, 0.72);
+
+// ---------- PBR-материалы: Lambert/Phong трактуем как Standard (иначе всё выглядит плоско) ----------
+(function upgradeLegacyMaterials() {
+  const mk = (defRough, defMetal) => function (params) {
+    params = Object.assign({}, params);
+    delete params.shininess;
+    delete params.specular;
+    return new THREE.MeshStandardMaterial(Object.assign({ roughness: defRough, metalness: defMetal }, params));
+  };
+  THREE.MeshLambertMaterial = mk(0.85, 0.02);
+  THREE.MeshPhongMaterial = mk(0.35, 0.10);
+})();
+
+// ---------- Текстуры (CC0, ambientCG) ----------
+const textureLoader = new THREE.TextureLoader();
+function loadTex(url, { repeat = [1, 1], srgb = false } = {}) {
+  const t = textureLoader.load(url);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(repeat[0], repeat[1]);
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  if (srgb) t.encoding = THREE.sRGBEncoding;
+  return t;
+}
+function makeTexturedMat({ map, normal, rough, repeat = [1, 1], roughness = 0.8, metalness = 0.02, tint = 0xffffff, normalScale = 0.85 }) {
+  const params = { color: tint, roughness, metalness };
+  if (map) params.map = loadTex(map, { repeat, srgb: true });
+  if (normal) { params.normalMap = loadTex(normal, { repeat }); params.normalScale = new THREE.Vector2(normalScale, normalScale); }
+  if (rough) params.roughnessMap = loadTex(rough, { repeat });
+  return new THREE.MeshStandardMaterial(params);
+}
+
 // ---------- Баланс ----------
 const BALANCE = {
   dayLength: 150,
@@ -153,10 +186,10 @@ const LAYOUTS = [
     fx: 'Флагман: поток +25% · репутация +30% · чек +10%', stats: { check: 1.1, patience: 1, stream: 1.25, rep: 1.3 } },
 ];
 const ROOM_TINTS = [
-  { floor: 0xffffff, wall: 0xffffff, glow: 0xffd9a0, glowI: 0.4 },
-  { floor: 0xf2e0d1, wall: 0xeeddd2, glow: 0xffe2b0, glowI: 0.55 },
-  { floor: 0xe2ecdd, wall: 0xd3e6d7, glow: 0xfff0dd, glowI: 0.35 },
-  { floor: 0xe0d2f5, wall: 0xd8cbf0, glow: 0xffd9a0, glowI: 0.6 },
+  { floor: 0xcfc4b6, wall: 0xf2eee6, glow: 0xffd9a0, glowI: 0.45 },
+  { floor: 0xd8c9bd, wall: 0xe9d8cd, glow: 0xffe2b0, glowI: 0.6 },
+  { floor: 0xc9cec0, wall: 0xd6e3d6, glow: 0xfff0dd, glowI: 0.4 },
+  { floor: 0xd2c8dd, wall: 0xd6cbe9, glow: 0xffd9a0, glowI: 0.65 },
 ];
 const roomRefs = { floorMat: null, wallMat: null };
 const layoutRefs = {};
@@ -402,7 +435,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputEncoding = THREE.sRGBEncoding;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1426);
@@ -411,15 +444,17 @@ scene.fog = new THREE.Fog(0x1a1426, 22, 44);
 const camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.1, 100);
 let cameraDist = 10.5;
 
-const hemi = new THREE.HemisphereLight(0xfff4e0, 0x3a2f52, 0.8);
+const hemi = new THREE.HemisphereLight(0xfff4e0, 0x3a2f52, 0.72);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffe8c4, 0.82);
+const sun = new THREE.DirectionalLight(0xffe8c4, 0.7);
 sun.position.set(6, 12, 6);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -12; sun.shadow.camera.right = 12;
 sun.shadow.camera.top = 12; sun.shadow.camera.bottom = -12;
 sun.shadow.camera.far = 30;
+sun.shadow.bias = -0.00035;
+sun.shadow.normalBias = 0.025;
 scene.add(sun);
 const lamp = new THREE.PointLight(0xffd9a0, 0.5, 16);
 lamp.position.set(0, 3.0, 0.5);
@@ -431,10 +466,12 @@ function removeLayoutColliders() { for (let i = colliders.length - 1; i >= 0; i-
 
 function boxMesh(w, h, d, color, opts = {}) {
   const { castShadow = true, ...matOpts } = opts;
-  const m = new THREE.Mesh(
-    new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshLambertMaterial({ color, ...matOpts })
-  );
+  const minSide = Math.min(w, h, d);
+  const radius = Math.min(minSide * 0.24, 0.055);
+  const geo = THREE.RoundedBoxGeometry
+    ? new THREE.RoundedBoxGeometry(w, h, d, 2, Math.max(0.004, Math.min(radius, minSide / 2 - 0.001)))
+    : new THREE.BoxGeometry(w, h, d);
+  const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color, ...matOpts }));
   m.castShadow = castShadow;
   m.receiveShadow = true;
   return m;
@@ -467,10 +504,10 @@ function untagInteract(root) {
 }
 
 function buildRoom() {
-  const floorTex = TEX.floor();
-  floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
-  floorTex.repeat.set(4, 3);
-  roomRefs.floorMat = new THREE.MeshLambertMaterial({ map: floorTex, color: 0xffffff });
+  roomRefs.floorMat = makeTexturedMat({
+    map: 'assets/textures/floor_color.jpg', normal: 'assets/textures/floor_normal.png',
+    rough: 'assets/textures/floor_rough.jpg', repeat: [6, 4], roughness: 0.72, normalScale: 0.7, tint: 0xcfc4b6,
+  });
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(ROOM.x * 2, ROOM.z * 2),
     roomRefs.floorMat
@@ -489,8 +526,10 @@ function buildRoom() {
   snowGround.receiveShadow = true;
   world.add(snowGround);
 
-  const wallTex = TEX.wall();
-  const wallMat = new THREE.MeshLambertMaterial({ map: wallTex });
+  const wallMat = makeTexturedMat({
+    map: 'assets/textures/wall_color.jpg', normal: 'assets/textures/wall_normal.png',
+    rough: 'assets/textures/wall_rough.jpg', repeat: [4.5, 1.3], roughness: 0.94, normalScale: 0.85,
+  });
   roomRefs.wallMat = wallMat;
   const mkWall = (w, h, d, x, y, z, rotY = 0) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
@@ -500,6 +539,16 @@ function buildRoom() {
   mkWall(ROOM.x * 2 + 0.6, ROOM.wallH, 0.3, 0, ROOM.wallH / 2, -ROOM.z - 0.15);
   mkWall(0.3, ROOM.wallH, ROOM.z * 2 + 0.6, -ROOM.x - 0.15, ROOM.wallH / 2, 0);
   mkWall(0.3, ROOM.wallH, ROOM.z * 2 + 0.6, ROOM.x + 0.15, ROOM.wallH / 2, 0);
+  // плинтусы: фиолетовый + жёлтый, вдоль стен
+  const baseMatV = new THREE.MeshStandardMaterial({ color: 0x7b2ff7, roughness: 0.5, emissive: 0x1c0530 });
+  const baseMatY = new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.5, emissive: 0x332200 });
+  const mkBaseboard = (w, d, x, y, z) => {
+    const v = new THREE.Mesh(new THREE.BoxGeometry(w, 0.10, d), baseMatV); v.position.set(x, y, z); world.add(v);
+    const yv = new THREE.Mesh(new THREE.BoxGeometry(w * 0.995, 0.055, d * 0.9), baseMatY); yv.position.set(x, y - 0.082, z); world.add(yv);
+  };
+  mkBaseboard(ROOM.x * 2, 0.06, 0, 0.32, -ROOM.z + 0.03);
+  mkBaseboard(0.06, ROOM.z * 2, -ROOM.x + 0.03, 0.32, 0);
+  mkBaseboard(0.06, ROOM.z * 2, ROOM.x - 0.03, 0.32, 0);
   addCollider(-9, 9, -6.0, -5.35);
   addCollider(-9, -8.35, -6, 6);
   addCollider(8.35, 9, -6, 6);
@@ -687,8 +736,8 @@ function buildBin() {
 function buildShelf(slotIndex) {
   const slotX = [-5.85, -1.95, 1.95, 5.85][slotIndex];
   const g = new THREE.Group();
-  const frameMat = new THREE.MeshLambertMaterial({ color: 0x6d35d6 });
-  const boardMat = new THREE.MeshLambertMaterial({ color: 0xd8d4e2 });
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x6d35d6, roughness: 0.38, metalness: 0.6 });
+  const boardMat = new THREE.MeshStandardMaterial({ color: 0xd8d4e2, roughness: 0.55, metalness: 0.25 });
   const W = 3.3, H = 2.15, D = 0.72;
   for (const sx of [-W / 2, W / 2]) for (const sz of [-D / 2, D / 2]) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, H, 0.1), frameMat);
@@ -897,6 +946,7 @@ function makeBigBoxMesh() {
     pivot.add(m); g.add(pivot);
     return pivot;
   };
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(1.15, 1.0, 0.95), HIT_MAT); hit.position.y = 0.42; g.add(hit);
   const front = mkFlap(0.93, 0.05, 0.35, 0, 0.36, 0, -0.175);
   const back = mkFlap(0.93, 0.05, 0.35, 0, -0.36, 0, 0.175);
   const left = mkFlap(0.35, 0.05, 0.62, -0.475, 0, 0.175, 0);
@@ -927,8 +977,9 @@ function spawnBigBox() {
 }
 function makeParcelMesh(color) {
   const g = new THREE.Group();
-  const body = boxMesh(0.5, 0.34, 0.4, color); body.position.y = 0.17; g.add(body);
-  const tape = boxMesh(0.52, 0.345, 0.13, shade(color, -0.35)); tape.position.y = 0.17; g.add(tape);
+  const body = boxMesh(0.5, 0.34, 0.4, color, { roughness: 0.55 }); body.position.y = 0.17; g.add(body);
+  const tape = boxMesh(0.52, 0.345, 0.13, shade(color, -0.35), { roughness: 0.4 }); tape.position.y = 0.17; g.add(tape);
+  const hit = new THREE.Mesh(HIT_BOX, HIT_MAT); hit.position.y = 0.2; g.add(hit);
   return g;
 }
 function shade(hex, amt) {
@@ -984,39 +1035,72 @@ function removeParcelWorld(parcel) {
 // ============================================================
 function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = null, scale = 1, hair = null }) {
   const g = new THREE.Group();
-  const legL = boxMesh(0.17, 0.5, 0.17, pants); legL.position.set(-0.13, 0.28, 0); g.add(legL);
-  const legR = boxMesh(0.17, 0.5, 0.17, pants); legR.position.set(0.13, 0.28, 0); g.add(legR);
-  const shoeL = boxMesh(0.19, 0.09, 0.28, 0x17121f); shoeL.position.set(-0.13, 0.045, 0.04); g.add(shoeL);
-  const shoeR = boxMesh(0.19, 0.09, 0.28, 0x17121f); shoeR.position.set(0.13, 0.045, 0.04); g.add(shoeR);
-  const torso = boxMesh(0.52, 0.66, 0.3, body); torso.position.y = 0.84; g.add(torso);
-  const stripe = boxMesh(0.53, 0.1, 0.31, 0xffd60a); stripe.position.y = 0.88; g.add(stripe);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 14, 12), new THREE.MeshLambertMaterial({ color: skin }));
-  head.position.y = 1.34; head.castShadow = true; g.add(head);
-  // глаза
-  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x241f2e });
-  for (const ex of [-0.08, 0.08]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 6, 6), eyeMat);
-    eye.position.set(ex, 1.36, 0.185);
-    g.add(eye);
+  const limbMat = (c, rough = 0.8) => new THREE.MeshStandardMaterial({ color: c, roughness: rough, metalness: 0.02 });
+  // ---- ноги: группы в тазобедренных суставах, качание естественнее ----
+  const hipY = 0.86;
+  const mkLeg = (side) => {
+    const hip = new THREE.Group();
+    hip.position.set(0.135 * side, hipY, 0);
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.075, 0.40, 14), limbMat(pants));
+    thigh.position.y = -0.20; thigh.castShadow = true; hip.add(thigh);
+    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.058, 0.35, 14), limbMat(pants));
+    shin.position.y = -0.555; shin.castShadow = true; hip.add(shin);
+    const shoe = boxMesh(0.17, 0.085, 0.30, 0x241f2e, { roughness: 0.45 }); shoe.position.set(0, -0.795, 0.055); hip.add(shoe);
+    g.add(hip);
+    return hip;
+  };
+  const legL = mkLeg(-1), legR = mkLeg(1);
+  // ---- торс: мягкий силуэт, белый воротник как в форме WB ----
+  const torso = boxMesh(0.47, 0.60, 0.27, body, { roughness: 0.75 }); torso.position.y = 1.17; g.add(torso);
+  const stripe = boxMesh(0.34, 0.075, 0.275, 0xffd60a, { roughness: 0.55 }); stripe.position.y = 1.26; g.add(stripe);
+  const collar = boxMesh(0.24, 0.05, 0.275, 0xf6f2ea, { roughness: 0.6 }); collar.position.y = 1.455; g.add(collar);
+  const belt = boxMesh(0.435, 0.06, 0.255, 0x241640, { roughness: 0.6 }); belt.position.y = 0.92; g.add(belt);
+  // ---- шея и голова ----
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.1, 10), limbMat(skin, 0.75));
+  neck.position.y = 1.49; neck.castShadow = true; g.add(neck);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.158, 20, 16), limbMat(skin, 0.62));
+  head.position.y = 1.60; head.castShadow = true; g.add(head);
+  // глаза: белок + зрачок, спокойное дружеское лицо
+  const white = new THREE.MeshBasicMaterial({ color: 0xfdfbf7 });
+  const pupil = new THREE.MeshBasicMaterial({ color: 0x241f2e });
+  for (const ex of [-0.058, 0.058]) {
+    const wme = new THREE.Mesh(new THREE.SphereGeometry(0.038, 8, 8), white);
+    wme.position.set(ex, 1.615, 0.132); wme.scale.z = 0.55; g.add(wme);
+    const pm = new THREE.Mesh(new THREE.SphereGeometry(0.021, 8, 8), pupil);
+    pm.position.set(ex, 1.615, 0.152); g.add(pm);
+    const brow = boxMesh(0.052, 0.013, 0.012, 0x2b233c, { castShadow: false }); brow.position.set(ex, 1.683, 0.143); g.add(brow);
   }
+  // лёгкий румянец — уютише
+  const blush = new THREE.MeshBasicMaterial({ color: 0xff9d9d, transparent: true, opacity: 0.32 });
+  for (const ex of [-0.096, 0.096]) {
+    const b = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 6), blush);
+    b.position.set(ex, 1.565, 0.138); b.scale.z = 0.4; g.add(b);
+  }
+  // волосы / кепка
   if (hair !== null && hat === null) {
-    const hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.215, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2.1),
-      new THREE.MeshLambertMaterial({ color: hair, flatShading: true }));
-    hairMesh.position.y = 1.35; g.add(hairMesh);
+    const hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.166, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2.05),
+      limbMat(hair, 0.7));
+    hairMesh.position.y = 1.603; hairMesh.scale.y = 0.94; hairMesh.castShadow = true; g.add(hairMesh);
+    const back = boxMesh(0.2, 0.09, 0.06, hair, { roughness: 0.7 }); back.position.set(0, 1.545, -0.115); g.add(back);
   }
   if (hat !== null) {
-    const cap = cylMesh(0.215, 0.225, 0.12, hat, 14); cap.position.y = 1.5; g.add(cap);
-    const brim = boxMesh(0.3, 0.035, 0.18, hat); brim.position.set(0, 1.45, 0.22); g.add(brim);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.163, 0.169, 0.115, 16), limbMat(hat, 0.7));
+    cap.position.y = 1.715; cap.castShadow = true; g.add(cap);
+    const brim = boxMesh(0.27, 0.028, 0.17, hat, { roughness: 0.7 }); brim.position.set(0, 1.66, 0.16); g.add(brim);
   }
-  // руки: плечи → предплечья → кисти
+  // ---- руки: плечо → предплечье → кисть, группы в плечевых суставах ----
   const mkArm = (side) => {
     const shoulder = new THREE.Group();
-    shoulder.position.set(0.33 * side, 1.13, 0);
-    const upper = boxMesh(0.13, 0.34, 0.13, body); upper.position.y = -0.16; shoulder.add(upper);
-    const fore = boxMesh(0.12, 0.3, 0.12, skin); fore.position.y = -0.45; shoulder.add(fore);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 8), new THREE.MeshLambertMaterial({ color: skin }));
-    hand.position.y = -0.64; shoulder.add(hand);
-    shoulder.rotation.z = side * 0.14;
+    shoulder.position.set(0.272 * side, 1.385, 0);
+    const pad = new THREE.Mesh(new THREE.SphereGeometry(0.082, 12, 10), limbMat(body, 0.75));
+    pad.position.y = 0.012; pad.castShadow = true; shoulder.add(pad);
+    const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.052, 0.28, 12), limbMat(body, 0.78));
+    upper.position.y = -0.165; upper.castShadow = true; shoulder.add(upper);
+    const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.049, 0.045, 0.25, 12), limbMat(skin, 0.7));
+    fore.position.y = -0.42; fore.castShadow = true; shoulder.add(fore);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.063, 12, 10), limbMat(skin, 0.6));
+    hand.position.y = -0.565; hand.castShadow = true; shoulder.add(hand);
+    shoulder.rotation.z = side * 0.17;
     g.add(shoulder);
     return shoulder;
   };
@@ -1034,13 +1118,13 @@ function animateWalk(mesh, phase, carrying) {
   }
   if (arms) {
     if (carrying) {
-      arms[0].rotation.x = -1.15 + Math.sin(phase * 2) * 0.06;
-      arms[1].rotation.x = -1.15 - Math.sin(phase * 2) * 0.06;
-      arms[0].rotation.z = -0.5; arms[1].rotation.z = 0.5;
+      arms[0].rotation.x = -1.02 + Math.sin(phase * 2) * 0.05;
+      arms[1].rotation.x = -1.02 - Math.sin(phase * 2) * 0.05;
+      arms[0].rotation.z = -0.34; arms[1].rotation.z = 0.34;
     } else {
       arms[0].rotation.x = -Math.sin(phase) * 0.55;
       arms[1].rotation.x = Math.sin(phase) * 0.55;
-      arms[0].rotation.z = -0.14; arms[1].rotation.z = 0.14;
+      arms[0].rotation.z = -0.17; arms[1].rotation.z = 0.17;
     }
   }
 }
@@ -1950,6 +2034,7 @@ function takeFromCell(cell) {
   parcel.cell = null;
   if (parcel.label && parcel.label.parent) parcel.label.parent.remove(parcel.label);
   parcel.label = null;
+  removeFromFloorItems(parcel);
   untagInteract(parcel.mesh);
   G.carried = { kind: 'parcel', id: parcel.id, mesh: parcel.mesh, parcel };
   attachCarried(parcel.mesh);
@@ -1960,6 +2045,7 @@ function takeFromCell(cell) {
 function placeInCell(cell) {
   const item = detachCarried();
   const parcel = item.parcel;
+  removeFromFloorItems(parcel);
   untagInteract(parcel.mesh);
   parcel.mesh.position.set(cell.x, cell.y, cell.z);
   parcel.mesh.rotation.y = rand(-0.15, 0.15);
@@ -2007,6 +2093,11 @@ function breakFragileParcel() {
   AudioSys.crack();
   removeParcelWorld(parcel);
   addRep(-0.12 * G.mods.repLoss);
+}
+function removeFromFloorItems(parcel) {
+  for (let i = floorItems.length - 1; i >= 0; i--) {
+    if (floorItems[i].parcel === parcel) floorItems.splice(i, 1);
+  }
 }
 function removeFromArray(arr, item) {
   const i = arr.indexOf(item);
@@ -2136,6 +2227,7 @@ function finishScan() {
   const item = detachCarried();
   world.remove(item.mesh);
   const parcel = item.parcel;
+  removeFromFloorItems(parcel);
   removeFromArray(parcels, parcel);
 
   const loc = locBonus();
@@ -2981,6 +3073,7 @@ window.PVZ.debugFillTable = function (n) {
   return parcels.length;
 };
 window.PVZ.debugSpawnUnpacked = function () { spawnUnpackedParcels(); return parcels.length; };
+window.PVZ.debugSetCameraDist = function (v) { cameraDist = v; };
 window.PVZ.debugSpawnParcel = function (type, x, z) {
   const p = spawnParcel(x == null ? TABLE_POS.x : x, z == null ? TABLE_POS.z : z, 0, type || null);
   p.mesh.position.y = type === 'defect' ? 0 : 0;
