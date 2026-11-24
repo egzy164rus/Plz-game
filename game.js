@@ -1282,10 +1282,10 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
   const white = new THREE.MeshBasicMaterial({ color: 0xfdfbf7 });
   const pupil = new THREE.MeshBasicMaterial({ color: 0x241f2e });
   for (const ex of [-0.058, 0.058]) {
-    const wme = new THREE.Mesh(new THREE.SphereGeometry(0.038, 8, 8), white);
-    wme.position.set(ex, 1.615, 0.132); wme.scale.z = 0.55; g.add(wme);
-    const pm = new THREE.Mesh(new THREE.SphereGeometry(0.021, 8, 8), pupil);
-    pm.position.set(ex, 1.615, 0.152); g.add(pm);
+    const wme = new THREE.Mesh(new THREE.SphereGeometry(0.034, 12, 8), white);
+    wme.position.set(ex, 1.615, 0.138); wme.scale.z = 0.6; g.add(wme);
+    const pm = new THREE.Mesh(new THREE.SphereGeometry(0.016, 10, 8), pupil);
+    pm.position.set(ex, 1.615, 0.157); pm.scale.z = 0.6; g.add(pm);
   }
   // лёгкий румянец — уютише
   const blush = new THREE.MeshBasicMaterial({ color: 0xff9d9d, transparent: true, opacity: 0.32 });
@@ -1301,10 +1301,10 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
   browR.position.set(0.058, 1.683, 0.143); g.add(browR);
   // рот — дуга (улыбка/нейтраль/хмурый)
   const mouth = new THREE.Mesh(
-    new THREE.TorusGeometry(0.046, 0.0085, 6, 12, 1.15),
+    new THREE.TorusGeometry(0.05, 0.0095, 6, 12, 1.15),
     new THREE.MeshStandardMaterial({ color: 0x6a4030, roughness: 0.65 })
   );
-  mouth.position.set(0, 1.535, 0.149);
+  mouth.position.set(0, 1.546, 0.152);
   mouth.rotation.z = MOUTH_SMILE;
   g.add(mouth);
   if (hair !== null && hat === null) {
@@ -3353,7 +3353,7 @@ window.PVZ.debugForceCustomer = function () {
   const s = shelves.find(s => s.cells.some(c => !c.parcel));
   const cell = s && s.cells.find(c => !c.parcel);
   if (!cell) return 'no-cell';
-  const p = spawnParcel(cell.x, cell.z, cell.y);
+  const p = spawnParcel(cell.x, cell.z, cell.y, 'normal');
   p.cell = cell; cell.parcel = p;
   const c = spawnCustomer();
   if (c) { c.patience = 0.5; }
