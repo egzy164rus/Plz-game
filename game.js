@@ -8,7 +8,7 @@
 'use strict';
 
 const HIT_MAT = new THREE.MeshBasicMaterial({ visible: false });
-const HIT_BOX = new THREE.BoxGeometry(0.72, 0.72, 0.72);
+const HIT_BOX = new THREE.BoxGeometry(0.55, 0.55, 0.55);
 
 // Локальное окружение для отражений (PMREM), без пересвета всей сцены
 let sharedEnvMap = null;
@@ -116,6 +116,9 @@ const BALANCE = {
   payRandom: 120,
   tipChance: 0.30,
   tipAmount: 40,
+  fastIssueSec: 12, tipComboBase: 25, tipComboMax: 4,
+  expressChance: 0.12, expressPayMul: 1.5, expressPatienceMul: 0.65,
+  vipChance: 0.10, vipPayMul: 2.2, vipPatienceMul: 0.6,
   repGain: 0.04,
   repLoss: 0.18,
   scanTime: 1.2,
@@ -179,6 +182,7 @@ const G = {
   lifetimeEarned: 0,
   dayEarned: 0,
   issuedToday: 0,
+  tipsToday: 0, tipCombo: 0,
   angryToday: 0,
   totalIssued: 0,
   carried: null,
@@ -1135,7 +1139,7 @@ function buildShelf(slotIndex) {
     const board = new THREE.Mesh(new THREE.BoxGeometry(W, 0.07, D), boardMat);
     board.position.set(0, y, 0); board.receiveShadow = true; board.castShadow = true; g.add(board);
   }
-  for (const dx of [-W / 6, W / 6]) {
+  for (const dx of [-0.88, 0.88]) {
     const div = new THREE.Mesh(new THREE.BoxGeometry(0.05, H - 0.3, D - 0.06), frameMat);
     div.position.set(dx, H / 2 + 0.05, 0); g.add(div);
   }
@@ -1147,16 +1151,16 @@ function buildShelf(slotIndex) {
   addCollider(slotX - W / 2 - 0.05, slotX + W / 2 + 0.05, -5.35, -4.5);
 
   const cells = [];
-  const cellOffsets = [-1.1, 0, 1.1];
+  const cellOffsets = [-1.32, -0.44, 0.44, 1.32];
   // невидимые хитбоксы ячеек — чтобы кликать даже по пустой ячейке
   const hitMat = new THREE.MeshBasicMaterial({ visible: false });
   for (let row = 0; row < 2; row++) {
-    for (let col = 0; col < 3; col++) {
+    for (let col = 0; col < 4; col++) {
       const x = slotX + cellOffsets[col];
       const y = row === 0 ? 0.46 : 1.36;
       const cell = { shelf: slotIndex, row, col, x, y, z: -4.88, parcel: null };
-      const hit = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.75, 0.6), hitMat);
-      hit.position.set(x, y + 0.2, -4.85);
+      const hit = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.62, 0.6), hitMat);
+      hit.position.set(x, y + 0.16, -4.85);
       world.add(hit);
       tagInteract(hit, 'cell', { cell });
       cells.push(cell);
@@ -1313,8 +1317,9 @@ const TYPE_INFO = {
   thermal: { sub: '❄ ТЕРМО',    color: 0x2ee6a8 },
   defect:  { sub: '✖ БРАК',     color: 0xe0455a },
   bulky:   { sub: '📦 ГАБАРИТ', color: 0xffc21c },
+  express: { sub: '⚡ ЭКСПРЕСС', color: 0xffa200 },
 };
-const TYPE_SHORT = { fragile: ' · ⚠ ХРУПКОЕ', thermal: ' · ❄ ТЕРМО', defect: ' · ✖ БРАК', bulky: ' · 📦 ГАБАРИТ' };
+const TYPE_SHORT = { fragile: ' · ⚠ ХРУПКОЕ', thermal: ' · ❄ ТЕРМО', defect: ' · ✖ БРАК', bulky: ' · 📦 ГАБАРИТ', express: ' · ⚡ ЭКСПРЕСС' };
 const floorItems = [];
 const bigBoxes = [];
 const parcels = [];
@@ -1381,12 +1386,12 @@ function getWBTapeMat() {
 }
 function makeParcelMesh(color) {
   const g = new THREE.Group();
-  const body = boxMesh(0.5, 0.34, 0.4, color, { roughness: 0.55 }); body.position.y = 0.17; g.add(body);
-  const tape = boxMesh(0.52, 0.345, 0.13, shade(color, -0.35), { roughness: 0.4 });
+  const body = boxMesh(0.36, 0.25, 0.29, color, { roughness: 0.55 }); body.position.y = 0.125; g.add(body);
+  const tape = boxMesh(0.375, 0.255, 0.095, shade(color, -0.35), { roughness: 0.4 });
   if (Math.random() < 0.45) tape.material = getWBTapeMat();
-  tape.position.y = 0.17; g.add(tape);
-  const hit = new THREE.Mesh(HIT_BOX, HIT_MAT); hit.position.y = 0.2; g.add(hit);
-  addBlobShadow(g, 0.66, 0.52);
+  tape.position.y = 0.125; g.add(tape);
+  const hit = new THREE.Mesh(HIT_BOX, HIT_MAT); hit.position.y = 0.16; g.add(hit);
+  addBlobShadow(g, 0.48, 0.38);
   return g;
 }
 function shade(hex, amt) {
@@ -1399,6 +1404,7 @@ function rollParcelType() {
   if (r < BALANCE.defectChance) return 'defect';
   if (r < BALANCE.defectChance + BALANCE.fragileChance) return 'fragile';
   if (r < BALANCE.defectChance + BALANCE.fragileChance + BALANCE.thermalChance) return 'thermal';
+  if (r < BALANCE.defectChance + BALANCE.fragileChance + BALANCE.thermalChance + BALANCE.expressChance) return 'express';
   return 'normal';
 }
 function spawnParcel(x, z, y = 0, forceType = null, forceId = null) {
@@ -1711,9 +1717,9 @@ let parcelsDirty = true;
 function activeQueueCount() {
   return customers.filter(c => c.state !== 'leaving').length;
 }
-function makeBubble(html) {
+function makeBubble(html, cls) {
   const div = document.createElement('div');
-  div.className = 'bubble';
+  div.className = 'bubble' + (cls ? ' ' + cls : '');
   div.innerHTML = `<div class="b-title">${html}</div><div class="patience"><i style="width:100%"></i></div>`;
   bubblesEl.appendChild(div);
   return { div, bar: div.querySelector('.patience i'), title: div.querySelector('.b-title') };
@@ -1725,6 +1731,7 @@ function spawnCustomer() {
   if (queueIndex >= QUEUE_SLOTS.length) return null;
   const parcel = choice(stored);
   parcel.reservedBy = 'pending';
+  const isVip = Math.random() < BALANCE.vipChance;
 
   const mesh = makePerson({ body: choice(BODY), skin: choice(SKIN), pants: choice([0x2b233c, 0x3a4a63, 0x4a3b2f]), scale: rand(0.92, 1.08), hair: choice(HAIR) });
   const sx = rand(-0.9, 0.9);
@@ -1736,12 +1743,14 @@ function spawnCustomer() {
     * (G.upgrades.coffee ? BALANCE.coffeePatience : 1)
     * G.mods.patience
     * locBonus().patience
-    * layoutStats().patience;
+    * layoutStats().patience
+    * (isVip ? BALANCE.vipPatienceMul : 1)
+    * (parcel.type === 'express' ? BALANCE.expressPatienceMul : 1);
 
-  const b = makeBubble('📱 Покажите QR');
+  const b = makeBubble(isVip ? '👑 VIP · Покажите QR' : '📱 Покажите QR', isVip ? 'vip' : null);
 
   const customer = {
-    mesh, parcel, isReturn: false, slot: queueIndex,
+    mesh, parcel, isReturn: false, slot: queueIndex, isVip,
     state: 'entering', qrScanned: false,
     patience: patienceMax, patienceMax,
     bubble: b.div, bubbleBar: b.bar, bubbleTitle: b.title,
@@ -1802,6 +1811,7 @@ function customerLeave(c, mood, penaltyMul = 1) {
   c.waypoints = [new THREE.Vector3(c.mesh.position.x, 0, c.mesh.position.z), new THREE.Vector3(0, 0, ROOM.z + 1.8)];
   c.wpIndex = 0;
   if (mood === 'angry') {
+    G.tipCombo = 0; updateComboChip();
     const loss = BALANCE.repLoss * (G.upgrades.plant ? 0.5 : 1) * (G.upgrades.greenwall ? 0.6 : 1) * G.mods.repLoss * penaltyMul;
     addRep(-loss);
     G.angryToday++;
@@ -1893,9 +1903,9 @@ function finishQr() {
   if (!customer || !customers.includes(customer) || customer.state === 'leaving') { updateHUD(); return; }
   customer.qrScanned = true;
   const parcel = customer.parcel;
-  if (customer.bubbleTitle) customer.bubbleTitle.textContent = '📦 ' + parcel.id;
+  if (customer.bubbleTitle) customer.bubbleTitle.textContent = (customer.isVip ? '👑 ' : '') + '📦 ' + parcel.id;
   // Карточка заказа + маяк над нужной ячейкой
-  G.activeOrder = { customer, parcel };
+  G.activeOrder = { customer, parcel, qrAt: performance.now() };
   const oc = document.getElementById('order-card');
   oc.classList.remove('hidden');
   document.getElementById('oc-id').textContent = parcel.id;
@@ -2408,7 +2418,7 @@ function closeLocations() {
 // ============================================================
 const SHOP_ITEMS = [
   // Мебель (размещается игроком)
-  { id: 'shelf', sec: 'Мебель', ico: '🗄️', name: 'Стеллаж «Классик»', desc: '+6 ячеек для заказов. Ставится вдоль стены автоматически. До 4 шт.',
+  { id: 'shelf', sec: 'Мебель', ico: '🗄️', name: 'Стеллаж «Классик»', desc: '+8 ячеек для заказов. Ставится вдоль стены автоматически. До 4 шт.',
     price: () => 700, once: false, canBuy: () => G.upgrades.shelf < 4, ownedLabel: () => G.upgrades.shelf + '/4',
     buy() { addShelf(G.upgrades.shelf); G.upgrades.shelf++; } },
   { id: 'sofa', sec: 'Мебель', ico: '🛋️', name: 'Диван «Комфорт»', desc: 'Терпение клиентов +35%. Устанавливается вами.',
@@ -2692,7 +2702,7 @@ function placeInCell(cell) {
   tagInteract(parcel.mesh, 'parcel');
   const info = TYPE_INFO[parcel.type];
   const label = labelSprite(parcel.id, { wanted: !!parcel.reservedBy, sub: info.sub, red: parcel.type === 'defect' });
-  label.position.set(cell.x, cell.y + 0.62, cell.z + 0.05);
+  label.position.set(cell.x, cell.y + 0.5, cell.z + 0.05);
   scene.add(label);
   parcel.label = label;
   parcelsDirty = true;
@@ -2773,7 +2783,7 @@ const PARCEL_ROW = [-0.62, 0, 0.62]; // legacy, оставлено для сов
 // Сетка мест на столе (2 ряда × 3 колонки) и полосы на полу — куда класть посылки,
 // чтобы они не сливались в одну точку при повторной приёмке
 const TABLE_SLOTS = [];
-for (const dz of [-0.28, 0.28]) for (const dx of [-0.62, 0, 0.62]) TABLE_SLOTS.push({ dx, dz });
+for (const dz of [-0.28, 0.28]) for (const dx of [-0.93, -0.31, 0.31, 0.93]) TABLE_SLOTS.push({ dx, dz });
 function isTableParcel(p, tx, tz) {
   if (p.cell || p.bulkySlot != null) return false;
   const m = p.mesh.position;
@@ -2820,7 +2830,7 @@ function spawnUnpackedParcels() {
       // стол забит — складываем аккуратной стопкой на столе (на пол не падаем!)
       const pile = parcels.filter(p => isTableParcel(p)).length;
       x = TABLE_POS.x + rand(-0.16, 0.16); z = TABLE_POS.z + rand(-0.16, 0.16);
-      y = 0.96 + 0.30 * Math.floor(Math.min(pile, 9) / 3);
+      y = 0.96 + 0.22 * Math.floor(Math.min(pile, 12) / 4);
     }
     const p = spawnParcel(x, z, y, forceT);
     p.mesh.rotation.y = rand(-0.12, 0.12);
@@ -2862,8 +2872,22 @@ function finishScan() {
   removeFromArray(parcels, parcel);
 
   const loc = locBonus();
-  const typeMul = parcel.type === 'fragile' ? BALANCE.fragilePayMul : parcel.type === 'thermal' ? BALANCE.thermalPayMul : parcel.type === 'bulky' ? BALANCE.bulkyPayMul : 1;
-  const payout = Math.round((BALANCE.basePay + Math.random() * BALANCE.payRandom + (G.upgrades.coffee && Math.random() < BALANCE.tipChance ? BALANCE.tipAmount : 0)) * typeMul * loc.pay * layoutStats().check);
+  const typeMul = parcel.type === 'fragile' ? BALANCE.fragilePayMul : parcel.type === 'thermal' ? BALANCE.thermalPayMul : parcel.type === 'bulky' ? BALANCE.bulkyPayMul : parcel.type === 'express' ? BALANCE.expressPayMul : 1;
+  const vipMul = customer && customer.isVip ? BALANCE.vipPayMul : 1;
+  const payout = Math.round((BALANCE.basePay + Math.random() * BALANCE.payRandom + (G.upgrades.coffee && Math.random() < BALANCE.tipChance ? BALANCE.tipAmount : 0)) * typeMul * vipMul * loc.pay * layoutStats().check);
+  // чаевые за скорость выдачи + комбо-серия
+  const dtIssue = G.activeOrder && G.activeOrder.qrAt ? (performance.now() - G.activeOrder.qrAt) / 1000 : 999;
+  let tip = 0;
+  if (dtIssue <= BALANCE.fastIssueSec) {
+    G.tipCombo = (G.tipCombo || 0) + 1;
+    tip = BALANCE.tipComboBase * Math.min(Math.max(G.tipCombo, 1), BALANCE.tipComboMax);
+  } else {
+    G.tipCombo = 0;
+  }
+  if (tip > 0) {
+    G.tipsToday = (G.tipsToday || 0) + tip;
+    G.money += tip; G.dayEarned += tip; G.lifetimeEarned += tip;
+  }
   G.money += payout;
   G.dayEarned += payout;
   G.lifetimeEarned += payout;
@@ -2875,7 +2899,9 @@ function finishScan() {
     * (G.upgrades.rug ? 1.15 : 1)
     * G.mods.repGain * loc.repGain * layoutStats().rep;
   addRep(repGain);
-  toast(`Выдано ${parcel.id} · +${payout} ₽`, 'good');
+  toast(`${customer && customer.isVip ? '👑 ' : ''}Выдано ${parcel.id} · +${payout} ₽`, 'good');
+  if (tip > 0) toast(`⚡ Чаевые +${tip} ₽${G.tipCombo >= 2 ? ` · комбо ×${Math.min(G.tipCombo, BALANCE.tipComboMax)}` : ''}`, 'good');
+  updateComboChip();
   AudioSys.scan();
   setTimeout(() => AudioSys.cash(), 180);
 
@@ -3193,6 +3219,14 @@ function updateVitalsHUD() {
   if (e && e.parentElement) e.parentElement.classList.toggle('low', G.energy < 15);
 }
 
+function updateComboChip() {
+  const chip = document.getElementById('combo-chip');
+  if (!chip) return;
+  const mul = Math.min(Math.max(G.tipCombo || 0, 1), BALANCE.tipComboMax);
+  if ((G.tipCombo || 0) >= 2) { chip.textContent = `🔥 Комбо ×${mul}`; chip.classList.remove('hidden'); }
+  else chip.classList.add('hidden');
+}
+
 // --- Перерыв: дверь закрыта, клиентов не будет (уборка/поставка/туалет)
 let breakBanner = null;
 function ensureBreakBanner() {
@@ -3269,7 +3303,7 @@ function applyDayEvent() {
 function startDay(n) {
   G.day = n;
   G.timeLeft = BALANCE.dayLength;
-  G.issuedToday = 0; G.dayEarned = 0; G.angryToday = 0;
+  G.issuedToday = 0; G.dayEarned = 0; G.angryToday = 0; G.tipsToday = 0; G.tipCombo = 0; updateComboChip();
   G.deliveryTimer = BALANCE.deliveryFirst;
   G.customerTimer = 5;
   G.warned10s = false;
@@ -3318,6 +3352,7 @@ function endDay() {
   if (autoEl) autoEl.textContent = autoOk ? `💾 Автосохранение · слот ${G.saveSlot} ✓` : '💾 Автосейв не удался';
   document.getElementById('de-day').textContent = G.day;
   document.getElementById('de-issued').textContent = G.issuedToday;
+  const tipsEl = document.getElementById('de-tips'); if (tipsEl) tipsEl.textContent = Math.round(G.tipsToday || 0) + ' ₽';
   document.getElementById('de-earned').textContent = Math.round(G.dayEarned) + ' ₽';
   document.getElementById('de-angry').textContent = G.angryToday;
   document.getElementById('de-rep').textContent = G.rep.toFixed(1) + ' ★';
@@ -3963,6 +3998,15 @@ window.PVZ.debugSetCameraDist = function (v) { cameraDist = v; };
 window.PVZ.debugSpawnParcel = function (type, x, z) {
   const p = spawnParcel(x == null ? TABLE_POS.x : x, z == null ? TABLE_POS.z : z, 0, type || null);
   p.mesh.position.y = type === 'defect' ? 0 : 0;
+  return p.id;
+};
+window.PVZ.debugStockParcel = function (type) {
+  const s = shelves.find(s => s.cells.some(c => !c.parcel));
+  const cell = s && s.cells.find(c => !c.parcel);
+  if (!cell) return 'no-cell';
+  const p = spawnParcel(cell.x, cell.z, cell.y, type || 'normal');
+  p.cell = cell; cell.parcel = p;
+  removeFromFloorItems(p);
   return p.id;
 };
 window.PVZ.hireLoader = hireLoader;

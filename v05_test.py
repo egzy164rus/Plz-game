@@ -33,8 +33,8 @@ with sync_playwright() as p:
     floor_items = [p for p in state if p['y'] < 0.1]
     print(f"parcels after 2nd reception: {n} | grid: {len(grid_items)} | pile: {len(pile_items)} | floor: {len(floor_items)}")
     print(f"grid min pairwise dist: {min_dist(grid_items):.2f} m")
-    assert len(grid_items) == 6, grid_items
-    assert len(pile_items) == n - 6, state
+    assert len(grid_items) == 8, grid_items
+    assert len(pile_items) == n - 8, state
     assert len(floor_items) == 0, state
     assert min_dist(grid_items) > 0.5
     page.evaluate("window.PVZ.debugClearParcels()")

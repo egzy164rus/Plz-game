@@ -97,6 +97,7 @@ button kbd { display: inline-block; margin-left: 6px; padding: 1px 6px; border-r
 #phase-chip.rush{background:rgba(255,92,122,.16);border-color:rgba(255,92,122,.4);color:#ffb3c2;animation:chipPulse 1s infinite}
 #phase-chip.lull{background:rgba(46,230,168,.1);border-color:rgba(46,230,168,.3);color:#a9f5d4}
 #break-chip{font-size:8.5px;font-weight:800;border-radius:999px;padding:2px 8px;background:rgba(255,214,10,.15);border:1px solid rgba(255,214,10,.45);color:#ffe95c;letter-spacing:.4px}
+#combo-chip{font-size:8.5px;font-weight:800;border-radius:999px;padding:2px 8px;background:rgba(255,92,92,.18);border:1px solid rgba(255,150,80,.5);color:#ffcf6e;letter-spacing:.4px;animation:chipPulse .8s infinite}
 @keyframes chipPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,92,122,.4)}50%{box-shadow:0 0 0 3px rgba(255,92,122,.18)}}
 #hud-event{font-size:9px;color:#ffd60a;min-height:11px;margin-top:2px;font-weight:600}
 
@@ -151,6 +152,8 @@ button kbd { display: inline-block; margin-left: 6px; padding: 1px 6px; border-r
 .bubble.soon .patience i{background:var(--warn)}
 .bubble.critical .patience i{background:var(--bad)}
 .bubble.critical{animation:bubblePulse .5s infinite}
+.bubble.vip{border:1.5px solid #ffd60a;box-shadow:0 0 16px rgba(255,214,10,.5),0 4px 12px rgba(0,0,0,.35)}
+.bubble.vip::after{border-top-color:#ffd60a}
 @keyframes bubblePulse{0%,100%{transform:translate(-50%,-100%) scale(1)}50%{transform:translate(-50%,-100%) scale(1.06)}}
 
 /* ============ Сенсор ============ */
@@ -318,7 +321,7 @@ button kbd { display: inline-block; margin-left: 6px; padding: 1px 6px; border-r
   #hud-day{font-size:9.5px;letter-spacing:1px}
   #day-timer{width:88px;height:5px;margin:3px auto 2px}
   #hud-issued{font-size:7px}
-  #phase-chip,#break-chip{font-size:7px;padding:1px 6px}
+  #phase-chip,#break-chip,#combo-chip{font-size:7px;padding:1px 6px}
   #hud-event{display:none}
   #hud-right{top:6px;right:6px;flex-direction:column;gap:4px}
   .hud-btn{font-size:9px;padding:5px 7px;border-radius:9px;min-width:32px}
