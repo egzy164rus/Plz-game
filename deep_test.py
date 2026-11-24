@@ -68,6 +68,8 @@ with sync_playwright() as p:
         stored = page.evaluate("window.PVZ.parcels.filter(p=>p.cell).length")
         print("parcels stored in cells:", stored)
 
+        # замораживаем естественный спавн, чтобы тест был детерминированным
+        page.evaluate("window.PVZ.G.customerTimer = 9999")
         # принудительно вызвать клиента
         page.evaluate("window.PVZ.spawnCustomer()")
         page.wait_for_timeout(4500)  # он идёт к очереди
@@ -77,12 +79,16 @@ with sync_playwright() as p:
         wanted = page.evaluate("window.PVZ.customers.map(c=>c.parcel?c.parcel.id:null)")
         print("wanted:", wanted)
 
-        # сначала QR клиента на стойке
-        page.evaluate("() => { window.PVZ.player.position.set(4.0, 0, 3.4); }")
-        page.wait_for_timeout(250)
-        page.keyboard.press("KeyE")
-        page.wait_for_timeout(1300)
-        print("qr scanned:", page.evaluate("window.PVZ.customers[0] && window.PVZ.customers[0].qrScanned"))
+        # сначала QR всех ожидающих клиентов на стойке (механика QR-first, выдача без QR запрещена)
+        for _ in range(3):
+            unscanned = page.evaluate("window.PVZ.customers.filter(c => c.state === 'waiting' && !c.isReturn && !c.qrScanned).length")
+            if unscanned == 0:
+                break
+            page.evaluate("() => { window.PVZ.player.position.set(4.0, 0, 3.4); }")
+            page.wait_for_timeout(250)
+            page.keyboard.press("KeyE")
+            page.wait_for_timeout(1300)
+        print("qr scanned:", page.evaluate("window.PVZ.customers.map(c => c.qrScanned)"))
 
         # взять нужную посылку из ячейки
         cell = page.evaluate("""() => {
@@ -109,8 +115,13 @@ with sync_playwright() as p:
             issued = page.evaluate("window.PVZ.G.issuedToday")
             print("money:", money, "issuedToday:", issued)
 
+    money_final = page.evaluate("window.PVZ.G.money")
+    issued_final = page.evaluate("window.PVZ.G.issuedToday")
+    print("RESULT:", "PASS" if issued_final >= 1 else "FAIL", f"(money={money_final}, issued={issued_final})")
     page.screenshot(path="/home/user/pvz-game/shot_deep.png")
     browser.close()
+    if issued_final < 1:
+        import sys; sys.exit(1)
 
 print("ERRORS:" if errors else "NO PAGE ERRORS")
 for e in errors:

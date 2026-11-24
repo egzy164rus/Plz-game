@@ -10,6 +10,32 @@
 const HIT_MAT = new THREE.MeshBasicMaterial({ visible: false });
 const HIT_BOX = new THREE.BoxGeometry(0.72, 0.72, 0.72);
 
+// Локальное окружение для отражений (PMREM), без пересвета всей сцены
+let sharedEnvMap = null;
+function getEnvMap() {
+  if (sharedEnvMap) return sharedEnvMap;
+  const c = document.createElement('canvas'); c.width = 256; c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0, '#fff3d6');
+  grad.addColorStop(0.40, '#c0aed3');
+  grad.addColorStop(0.62, '#6f5f8a');
+  grad.addColorStop(1, '#241d33');
+  g.fillStyle = grad; g.fillRect(0, 0, 256, 128);
+  const sun = g.createRadialGradient(196, 30, 2, 196, 30, 46);
+  sun.addColorStop(0, 'rgba(255,250,224,1)'); sun.addColorStop(1, 'rgba(255,250,224,0)');
+  g.fillStyle = sun; g.fillRect(0, 0, 256, 128);
+  const glowV = g.createRadialGradient(40, 44, 2, 40, 44, 52);
+  glowV.addColorStop(0, 'rgba(123,47,247,0.9)'); glowV.addColorStop(1, 'rgba(123,47,247,0)');
+  g.fillStyle = glowV; g.fillRect(0, 0, 256, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  sharedEnvMap = pmrem.fromEquirectangular(tex).texture;
+  tex.dispose(); pmrem.dispose();
+  return sharedEnvMap;
+}
+
 // Контактная тень-«блин»: дёшево вместо SSAO, сильно заземляет объекты
 let blobMat = null;
 const blobGeo = new THREE.PlaneGeometry(1, 1);
@@ -566,6 +592,8 @@ function buildRoom() {
     map: 'assets/textures/floor_color.jpg', normal: 'assets/textures/floor_normal.png',
     rough: 'assets/textures/floor_rough.jpg', repeat: [6, 4], roughness: 0.72, normalScale: 0.7, tint: 0xcfc4b6,
   });
+  roomRefs.floorMat.envMap = getEnvMap();
+  roomRefs.floorMat.envMapIntensity = 0.3;
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(ROOM.x * 2, ROOM.z * 2),
     roomRefs.floorMat
@@ -745,6 +773,36 @@ function updateDust(dt, t) {
   dust.geometry.attributes.position.needsUpdate = true;
 }
 
+// История ПВЗ в деталях: правила у входа + полка с растениями
+function buildStoryProps() {
+  // стойка с правилами пункта выдачи
+  const rack = new THREE.Group(); rack.name = 'story-rack';
+  const foot = cylMesh(0.23, 0.27, 0.06, 0x2b233c, 12); foot.position.y = 0.03; rack.add(foot);
+  const pole = cylMesh(0.05, 0.07, 1.05, 0x2b233c, 10); pole.position.y = 0.58; rack.add(pole);
+  const plate = boxMesh(0.46, 0.1, 0.05, 0xffd60a); plate.position.y = 1.43; rack.add(plate);
+  const plateText = boxMesh(0.36, 0.05, 0.052, 0x17121f, { castShadow: false }); plateText.position.y = 1.43; rack.add(plateText);
+  const holder = boxMesh(0.44, 0.52, 0.05, 0x3a2a55); holder.position.y = 1.12; rack.add(holder);
+  const flyerCols = [0xffd60a, 0x7b2ff7, 0xf6f2ea];
+  flyerCols.forEach((c, i) => {
+    const flyer = new THREE.Mesh(new THREE.PlaneGeometry(0.105, 0.15), new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, side: THREE.DoubleSide }));
+    flyer.position.set(-0.13 + i * 0.13, 1.12, 0.028); rack.add(flyer);
+  });
+  rack.position.set(-2.3, 0, 4.5);
+  world.add(rack);
+  addCollider(-2.55, -2.05, 4.3, 4.68, 'story');
+  // настенная полка с растениями на задней стене
+  const shelf = new THREE.Group(); shelf.name = 'story-shelf';
+  const board = boxMesh(1.5, 0.055, 0.26, 0xa8783f); board.position.y = 0; shelf.add(board);
+  const potCols = [0xc46b3f, 0x7b2ff7, 0xf6f2ea];
+  [-0.48, 0, 0.48].forEach((dx, i) => {
+    const pot = cylMesh(0.065, 0.052, 0.11, potCols[i], 10); pot.position.set(dx, 0.082, 0); shelf.add(pot);
+    const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(0.088, 0), new THREE.MeshLambertMaterial({ color: i === 1 ? 0x3fa860 : 0x2e8b4f, flatShading: true }));
+    leaf.position.set(dx, 0.2, 0); leaf.castShadow = true; shelf.add(leaf);
+  });
+  shelf.position.set(0, 2.02, -5.26);
+  world.add(shelf);
+}
+
 // Падающий снег снаружи витрины
 let snow = null, snowSpeeds = null;
 function buildSnow() {
@@ -798,7 +856,7 @@ function buildCounter() {
   const base = boxMesh(2.8, 1.0, 0.95, 0x4a3b66); base.position.y = 0.5; g.add(base);
   const panel = boxMesh(2.6, 0.7, 0.04, 0x5b4a80); panel.position.set(0, 0.55, 0.49); g.add(panel);
   const top = new THREE.Mesh(new THREE.RoundedBoxGeometry(3.0, 0.09, 1.1, 2, 0.035),
-    new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.24, metalness: 0.88, emissive: 0x2e1c00 }));
+    new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.22, metalness: 0.85, emissive: 0x2e1c00, envMap: getEnvMap(), envMapIntensity: 1.1 }));
   top.position.y = 1.05; top.castShadow = true; top.receiveShadow = true; g.add(top);
   const stripe = boxMesh(2.8, 0.16, 0.02, 0x7b2ff7); stripe.position.set(0, 0.72, 0.52); g.add(stripe);
   const term = boxMesh(0.42, 0.3, 0.06, 0x17121f); term.position.set(-1.0, 1.37, 0.2); term.rotation.x = -0.25; g.add(term);
@@ -1228,7 +1286,6 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
     wme.position.set(ex, 1.615, 0.132); wme.scale.z = 0.55; g.add(wme);
     const pm = new THREE.Mesh(new THREE.SphereGeometry(0.021, 8, 8), pupil);
     pm.position.set(ex, 1.615, 0.152); g.add(pm);
-    const brow = boxMesh(0.052, 0.013, 0.012, 0x2b233c, { castShadow: false }); brow.position.set(ex, 1.683, 0.143); g.add(brow);
   }
   // лёгкий румянец — уютише
   const blush = new THREE.MeshBasicMaterial({ color: 0xff9d9d, transparent: true, opacity: 0.32 });
@@ -1237,6 +1294,19 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
     b.position.set(ex, 1.565, 0.138); b.scale.z = 0.4; g.add(b);
   }
   // волосы / кепка
+  // брови (анимируются эмоцией)
+  const browL = boxMesh(0.052, 0.013, 0.012, 0x2b233c, { castShadow: false });
+  browL.position.set(-0.058, 1.683, 0.143); g.add(browL);
+  const browR = boxMesh(0.052, 0.013, 0.012, 0x2b233c, { castShadow: false });
+  browR.position.set(0.058, 1.683, 0.143); g.add(browR);
+  // рот — дуга (улыбка/нейтраль/хмурый)
+  const mouth = new THREE.Mesh(
+    new THREE.TorusGeometry(0.046, 0.0085, 6, 12, 1.15),
+    new THREE.MeshStandardMaterial({ color: 0x6a4030, roughness: 0.65 })
+  );
+  mouth.position.set(0, 1.535, 0.149);
+  mouth.rotation.z = MOUTH_SMILE;
+  g.add(mouth);
   if (hair !== null && hat === null) {
     const hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.166, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2.05),
       limbMat(hair, 0.7));
@@ -1269,7 +1339,35 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
   addBlobShadow(g, 1.04, 0.8);
   g.userData.legs = [legL, legR];
   g.userData.arms = [armL, armR];
+  g.userData.brows = [browL, browR];
+  g.userData.mouth = mouth;
+  g.userData.faceMood = 'neutral';
   return g;
+}
+
+// ---------- эмоции на лице ----------
+const MOUTH_SMILE = Math.PI * 1.5 - 0.575;
+function setFaceMood(g, mood) {
+  const { brows, mouth } = g.userData;
+  if (!brows || !mouth) return;
+  if (mood === 'happy' || mood === 'served') {
+    brows[0].rotation.z = 0.13; brows[1].rotation.z = -0.13;
+    mouth.rotation.z = MOUTH_SMILE; mouth.scale.y = 1.45;
+  } else if (mood === 'angry') {
+    brows[0].rotation.z = -0.27; brows[1].rotation.z = 0.27;
+    mouth.rotation.z = MOUTH_SMILE + Math.PI; mouth.scale.y = 1.0;
+  } else {
+    brows[0].rotation.z = 0; brows[1].rotation.z = 0;
+    mouth.rotation.z = MOUTH_SMILE; mouth.scale.y = 0.22;
+  }
+}
+function updateFaces() {
+  for (const c of customers) {
+    if (c.mood === 'served' || c.mood === 'angry') continue;
+    const f = c.patienceMax > 0 ? clamp(c.patience / c.patienceMax, 0, 1) : 1;
+    const mood = f > 0.62 ? 'happy' : f > 0.3 ? 'neutral' : 'angry';
+    if (c.faceMood !== mood) { c.faceMood = mood; setFaceMood(c.mesh, mood); }
+  }
 }
 function animateWalk(mesh, phase, carrying) {
   const { legs, arms } = mesh.userData;
@@ -1390,6 +1488,8 @@ function relayoutQueue() {
 }
 function customerLeave(c, mood, penaltyMul = 1) {
   c.state = 'leaving';
+  c.mood = mood;
+  setFaceMood(c.mesh, mood === 'served' ? 'served' : 'angry');
   if (c.bubble) { c.bubble.remove(); c.bubble = null; }
   untagInteract(c.mesh);
   if (G.activeOrder && G.activeOrder.customer === c) clearOrderCard();
@@ -1686,7 +1786,7 @@ function buildVitrineUnit(x, z) {
   const backGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 1.15), new THREE.MeshBasicMaterial({ color: 0xffedc2 }));
   backGlow.position.set(0, 0.85, -0.24); g.add(backGlow);
   const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.25),
-    new THREE.MeshPhongMaterial({ color: 0xcfeaff, transparent: true, opacity: 0.32, shininess: 90, side: THREE.DoubleSide, depthWrite: false }));
+    new THREE.MeshStandardMaterial({ color: 0xcfeaff, transparent: true, opacity: 0.34, roughness: 0.08, metalness: 0.1, side: THREE.DoubleSide, depthWrite: false, envMap: getEnvMap(), envMapIntensity: 0.8 }));
   glass.position.set(0, 0.82, 0.285); g.add(glass);
   const goldTop = boxMesh(1.2, 0.07, 0.6, 0xffd60a); goldTop.position.y = 1.53; g.add(goldTop);
   const productCols = [0xff5c7a, 0x4cc9f0, 0x2ee6a8, 0xffd60a, 0xff8ad4, 0x7b2ff7];
@@ -3135,6 +3235,7 @@ function tick() {
 
   if (G.screen === 'play' || G.screen === 'shop' || G.screen === 'pause') {
     updateBubbles();
+    updateFaces();
     highlightWantedCells();
     updateOrderCard();
   }
@@ -3177,6 +3278,7 @@ buildRoom();
 buildSeasonDecor();
 buildSnow();
 buildLightShaft();
+buildStoryProps();
 applyLayout(G.layoutsByLoc['metro'] != null ? G.layoutsByLoc['metro'] : 0);
 addShelf(0);
 
@@ -3247,6 +3349,16 @@ window.PVZ.debugSpawnParcel = function (type, x, z) {
   return p.id;
 };
 window.PVZ.hireLoader = hireLoader;
+window.PVZ.debugForceCustomer = function () {
+  const s = shelves.find(s => s.cells.some(c => !c.parcel));
+  const cell = s && s.cells.find(c => !c.parcel);
+  if (!cell) return 'no-cell';
+  const p = spawnParcel(cell.x, cell.z, cell.y);
+  p.cell = cell; cell.parcel = p;
+  const c = spawnCustomer();
+  if (c) { c.patience = 0.5; }
+  return c ? c.state : 'no-customer';
+};
 renderRecords();
 updateHUD();
 camera.position.set(0, 7.6, 10);
