@@ -29,12 +29,22 @@
 
   <!-- Загрузка -->
   <div id="loading">
+    <div class="boot-floats" aria-hidden="true">
+      <span style="left:9%;top:16%;animation-delay:-1s">📦</span>
+      <span style="left:84%;top:24%;animation-delay:-3.4s">🎁</span>
+      <span style="left:16%;top:72%;animation-delay:-5.2s">🥡</span>
+      <span style="left:88%;top:66%;animation-delay:-2.2s">🟡</span>
+      <span style="left:38%;top:10%;animation-delay:-4.1s">💜</span>
+    </div>
     <div class="boot-inner">
-      <div class="boot-logo">📦</div>
+      <div class="boot-conveyor" aria-hidden="true"><div class="boot-belt"></div><div class="boot-box">📦</div></div>
+      <div class="boot-logo"><span class="boot-logo-box">📦</span></div>
       <div class="boot-title">ПВЗ: <span>С НУЛЯ</span></div>
       <div class="boot-tag">пункт выдачи, который вы построите сами</div>
       <div class="boot-bar"><div id="boot-fill"></div></div>
       <div id="boot-status">Зажигаем лампы</div>
+      <div id="boot-tip" class="boot-tip">Совет: час пик в обед и вечером — держитесь 🔥</div>
+      <div class="boot-ver">WILDBERRIES-STYLE · v0.9</div>
     </div>
   </div>
 
@@ -54,15 +64,16 @@
       <div class="hud-row small"><span id="hud-rank">Стажировка</span></div>
     </div>
     <div id="hud-center">
-      <div id="hud-day">День 1</div>
+      <div id="hud-day">День 1 · 09:00</div>
       <div id="day-timer"><div id="day-timer-fill"></div></div>
-      <div id="hud-issued">Выдано: 0</div>
+      <div id="hud-chips"><span id="hud-issued">Выдано: 0</span><span id="phase-chip">🌤️ Утро</span><span id="break-chip" class="hidden">🚪 Перерыв</span></div>
       <div id="hud-event"></div>
     </div>
     <div id="hud-right">
       <button id="btn-shop" class="hud-btn">🛒<kbd>B</kbd></button>
       <button id="btn-loc" class="hud-btn">🏠</button>
       <button id="btn-inventory" class="hud-btn hidden">🪑 Склад<span id="inv-count" class="badge">0</span></button>
+      <button id="btn-break" class="hud-btn" title="Перерыв — дверь закрыта">🚪<kbd>N</kbd></button>
       <button id="btn-pause" class="hud-btn">⏸<kbd>Esc</kbd></button>
     </div>
 
@@ -73,6 +84,11 @@
       <div class="oc-patience"><i id="oc-fill"></i></div>
     </div>
 
+    <div id="vitals" class="panel">
+      <div class="vital-row"><span class="vital-ico">🍖</span><div class="vital-bar hunger"><i id="hunger-fill"></i></div></div>
+      <div class="vital-row"><span class="vital-ico">⚡</span><div class="vital-bar energy"><i id="energy-fill"></i></div></div>
+    </div>
+    <div id="compass" class="hidden"><div id="compass-arrow">↑</div><div class="compass-txt"><b id="compass-id">WB-0000</b><span id="compass-dist">0 м</span></div></div>
     <div id="build-hint" class="hidden">🖱 Клик — поставить &nbsp;·&nbsp; <kbd>R</kbd> — повернуть &nbsp;·&nbsp; Esc — отмена</div>
     <div id="carried" class="hidden"><span id="carried-ico">📦</span><span id="carried-text"></span></div>
     <div id="interact-prompt" class="hidden"><kbd>E</kbd> <span id="interact-text"></span></div>
@@ -108,11 +124,17 @@
             <button class="logo-opt" data-mark="🦊" aria-label="Лиса">🦊</button>
             <button class="logo-opt" data-mark="🌿" aria-label="Лист">🌿</button>
           </div>
+          <div class="slot-block">
+            <div class="menu-field-label">Сохранение</div>
+            <div class="slot-row" id="slot-row"></div>
+            <div class="slot-foot"><span id="slot-info">Слот пуст — начнёте чистую смену</span><button id="btn-erase-slot" class="mini-btn hidden">Стереть</button></div>
+            <button id="btn-newgame" class="newgame-link hidden">↺ Новая смена (перезапишет слот)</button>
+          </div>
         </div>
 
         <button id="btn-start" class="big-btn menu-cta">Открыть смену →</button>
         <div class="menu-foot" id="menu-records">Рекорд ещё не установлен — станьте первым!</div>
-        <div class="menu-foot">WASD — бег · E — действие · клик по посылке — взять · B — магазин · <span id="app-version">v0.8.1</span></div>
+        <div class="menu-foot">WASD — бег · E — действие · клик по посылке — взять · B — магазин · <span id="app-version">v0.9</span></div>
       </div>
 
       <div class="menu-side">
@@ -140,7 +162,9 @@
   <!-- Магазин -->
   <div id="shop" class="overlay hidden">
     <div class="modal-card">
-      <div class="modal-head"><h2>🛒 Магазин улучшений</h2><div id="shop-money" class="shop-money">0 ₽</div></div>
+      <div class="modal-head"><h2>🛒 Магазин</h2><div id="shop-money" class="shop-money">0 ₽</div></div>
+      <div id="shop-tabs"></div>
+      <div id="shop-subs"></div>
       <div id="shop-grid"></div>
       <button id="btn-shop-close" class="big-btn small">Закрыть <kbd>B</kbd></button>
     </div>
@@ -167,6 +191,7 @@
         <div class="stat"><div class="stat-num" id="de-rep">4.0 ★</div><div class="stat-lbl">репутация</div></div>
       </div>
       <div class="rank-line">Ранг: <b id="de-rank">Стажировка</b></div>
+      <div class="de-autosave" id="de-autosave">💾 Автосохранение…</div>
       <div class="de-finance">
         <span>Аренда и ЖКХ: <b id="de-costs">−410 ₽</b></span>
         <span>Чистыми за смену: <b id="de-net">0 ₽</b></span>
@@ -187,6 +212,7 @@
       <div class="modal-actions col">
         <button id="btn-resume" class="big-btn small">Продолжить</button>
         <button id="btn-pause-shop" class="ghost-btn">🛒 Магазин</button>
+        <button id="btn-pause-save" class="ghost-btn">💾 Сохранить смену</button>
         <button id="btn-restart" class="ghost-btn danger">↺ Начать заново</button>
       </div>
     </div>

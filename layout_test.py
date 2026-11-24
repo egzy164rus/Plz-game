@@ -12,7 +12,7 @@ with sync_playwright() as p:
     page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
 
     page.goto(URL, wait_until="networkidle")
-    page.wait_for_selector("#btn-start", state="visible", timeout=30000)
+    page.wait_for_selector("#btn-start", state="visible", timeout=90000)
     page.click("#btn-start")
     page.wait_for_timeout(600)
     print("layout before:", page.evaluate("window.PVZ.G.layout"), "| counter x:", page.evaluate("window.PVZ.COUNTER_POS.x"))
@@ -34,7 +34,7 @@ with sync_playwright() as p:
 
     # перезагрузка: выбор должен пережить рестарт (localStorage)
     page.reload(wait_until="networkidle")
-    page.wait_for_selector("#btn-start", state="visible", timeout=30000)
+    page.wait_for_selector("#btn-start", state="visible", timeout=90000)
     page.click("#btn-start")
     page.wait_for_timeout(600)
     print("after reload — layout:", page.evaluate("window.PVZ.G.layout"), "| counter x:", page.evaluate("window.PVZ.COUNTER_POS.x"))

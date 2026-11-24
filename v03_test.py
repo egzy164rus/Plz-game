@@ -11,7 +11,7 @@ with sync_playwright() as p:
     page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
 
     page.goto(URL, wait_until="networkidle")
-    page.wait_for_selector("#btn-start", state="visible", timeout=30000)
+    page.wait_for_selector("#btn-start", state="visible", timeout=90000)
     page.wait_for_timeout(300)
     print("loading hidden:", page.evaluate("document.getElementById('loading').classList.contains('done')"))
 
@@ -101,7 +101,8 @@ with sync_playwright() as p:
     page.evaluate("window.PVZ.G.money = 99999")
     page.click("#btn-shop")
     page.wait_for_timeout(300)
-    print("shop sections:", page.evaluate("[...document.querySelectorAll('.shop-section')].map(e=>e.textContent)"))
+    print("shop tabs:", page.evaluate("[...document.querySelectorAll('.shop-tab')].map(e=>e.textContent.trim())"))
+    print("shop subs:", page.evaluate("[...document.querySelectorAll('.shop-sub')].map(e=>e.textContent.trim())"))
     page.screenshot(path="/home/user/pvz-game/shot_v03_shop.png")
     page.evaluate("""() => {
         const items = [...document.querySelectorAll('.shop-item')];

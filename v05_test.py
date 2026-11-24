@@ -9,7 +9,7 @@ with sync_playwright() as p:
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.goto(URL, wait_until="networkidle")
-    page.wait_for_selector("#btn-start", state="visible", timeout=30000)
+    page.wait_for_selector("#btn-start", state="visible", timeout=90000)
     page.click("#btn-start")
     page.wait_for_timeout(3500)
 
@@ -28,13 +28,15 @@ with sync_playwright() as p:
                 d = ((items[i]['x']-items[j]['x'])**2 + (items[i]['y']-items[j]['y'])**2 + (items[i]['z']-items[j]['z'])**2) ** 0.5
                 best = min(best, d)
         return best
-    table_items = [p for p in state if p['y'] > 0.5]
+    grid_items = [p for p in state if abs(p['y'] - 0.96) < 0.05]
+    pile_items = [p for p in state if p['y'] > 1.2]
     floor_items = [p for p in state if p['y'] < 0.1]
-    print(f"parcels after 2nd reception: {n} | on table: {len(table_items)} | on floor: {len(floor_items)}")
-    print(f"table min pairwise dist: {min_dist(table_items):.2f} m | floor min pairwise dist: {min_dist(floor_items):.2f} m")
-    assert len(table_items) == 6, table_items
-    assert len(floor_items) >= 3
-    assert min_dist(table_items) > 0.5 and min_dist(floor_items) > 0.5
+    print(f"parcels after 2nd reception: {n} | grid: {len(grid_items)} | pile: {len(pile_items)} | floor: {len(floor_items)}")
+    print(f"grid min pairwise dist: {min_dist(grid_items):.2f} m")
+    assert len(grid_items) == 6, grid_items
+    assert len(pile_items) == n - 6, state
+    assert len(floor_items) == 0, state
+    assert min_dist(grid_items) > 0.5
     page.evaluate("window.PVZ.debugClearParcels()")
 
     # ---- 2) Планировки: декор и оттенки

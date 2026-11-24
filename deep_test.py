@@ -11,7 +11,7 @@ with sync_playwright() as p:
     page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
 
     page.goto(URL, wait_until="networkidle")
-    page.wait_for_timeout(1000)
+    page.wait_for_selector("#menu:not(.hidden)", timeout=90000)
     page.click("#btn-start")
     # ждём первую поставку (3-я секунда)
     page.wait_for_timeout(3500)

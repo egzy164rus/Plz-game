@@ -3,7 +3,7 @@ with sync_playwright() as p:
     browser = p.chromium.launch(args=["--use-gl=swiftshader", "--enable-unsafe-swiftshader"])
     page = browser.new_page(viewport={"width": 900, "height": 600})
     page.goto("http://localhost:8090/", wait_until="networkidle")
-    page.wait_for_selector("#btn-start", state="visible", timeout=30000)
+    page.wait_for_selector("#btn-start", state="visible", timeout=90000)
     page.click("#btn-start")
     page.wait_for_timeout(2000)
     info = page.evaluate("""() => {

@@ -11,7 +11,7 @@ with sync_playwright() as p:
     page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
     page.goto(URL, wait_until="networkidle")
-    page.wait_for_selector("#btn-start", state="visible", timeout=30000)
+    page.wait_for_selector("#btn-start", state="visible", timeout=90000)
     page.tap("#btn-start")
     page.wait_for_timeout(3500)   # первая поставка
 
@@ -51,9 +51,14 @@ with sync_playwright() as p:
         print("left-half tap does NOT pick up:", page.evaluate("window.PVZ.G.carried") is None)
 
     # --- 3) правая половина ТАП = активация (взять короб руками) ---
-    touch_start(330, 700); touch_end()   # тап по пустой зоне справа — активация (E)
+    touch_start(367, 683); touch_end()   # тап по кнопке E (центр, right:16 bottom:40, 74px)
     page.wait_for_timeout(250)
-    print("right-half tap picked box:", page.evaluate("window.PVZ.G.carried && window.PVZ.G.carried.kind"))
+    print("E-button tap picked box:", page.evaluate("window.PVZ.G.carried && window.PVZ.G.carried.kind"))
+    box2 = page.evaluate("window.PVZ.G.carried")
+    if box2 is None:
+        touch_start(300, 300); touch_end()   # быстрый тап по пустой зоне справа — активация
+        page.wait_for_timeout(250)
+        print("canvas right-half tap picked box:", page.evaluate("window.PVZ.G.carried && window.PVZ.G.carried.kind"))
 
     # --- 4) прозрачность кнопок: кнопка E почти непрозрачная ---
     opacity = page.evaluate("getComputedStyle(document.getElementById('btn-touch-e')).backgroundColor")

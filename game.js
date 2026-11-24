@@ -99,7 +99,9 @@ function makeTexturedMat({ map, normal, rough, repeat = [1, 1], roughness = 0.8,
 
 // ---------- Баланс ----------
 const BALANCE = {
-  dayLength: 150,
+  dayLength: 230,
+  eatCost: 15, eatHunger: 45, wcEnergy: 30,
+  bulkyChance: 0.16, bulkyPayMul: 1.8, bulkySlots: 3,
   startMoney: 400,
   startRep: 4.2,
   parcelsPerBox: 3,
@@ -204,6 +206,14 @@ const G = {
   tapWorldHit: false,
   layout: 0,              // применённая планировка зала
   layoutsByLoc: {},       // выбранная планировка для каждой локации
+  hunger: 100,
+  energy: 100,
+  breakOn: false,
+  breakOpenAtMin: null,   // игровые минуты, когда дверь откроется сама
+  hungerWarned: false,
+  energyWarned: false,
+  saveSlot: 1,            // активный слот сохранения (1..3)
+  lastPhaseId: 'start',
 };
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -230,6 +240,11 @@ const BIN_POS = { x: -6.6, z: 3.7 };
 const COUNTER_POS = { x: 4.0, z: 2.4 };
 const COUNTER_APPROACH = { x: 4.0, z: 3.6 };
 const PALLET_POS = { x: -7.0, z: -1.0 };
+// Стойка «Габарит» у входа слева, бытовая зона у правой стены
+const BULKY_RACK = { x: -7.8, z: 2.3 };
+const BULKY_SLOT_Y = [0.44, 1.24, 2.04];
+const FRIDGE_POS = { x: 7.8, z: 4.05 };
+const WC_POS = { x: 7.75, z: 1.35 };
 // Планировки зала — те же 0-3, что и схемы в каталоге помещений
 //  each plan: своя форма/мебель/свет + игровой эффект (fx) и множители (stats)
 const LAYOUTS = [
@@ -253,6 +268,182 @@ const layoutRefs = {};
 let counterGlowLight = null;
 let coffeeMachineRef = null;
 let benchRef = null;
+
+// ============================================================
+//  Сохранения — 3 слота, выбор в меню, автосейв на итогах дня
+// ============================================================
+const SAVE_KEY = n => 'pvz_save_v1_' + n;
+const ACTIVE_SLOT_KEY = 'pvz_active_slot';
+function loadSlotData(n) {
+  try { const raw = localStorage.getItem(SAVE_KEY(n)); return raw ? JSON.parse(raw) : null; }
+  catch (e) { return null; }
+}
+function saveToSlot(n, silent) {
+  try {
+    const data = collectSave();
+    data.slot = n;
+    localStorage.setItem(SAVE_KEY(n), JSON.stringify(data));
+    localStorage.setItem(ACTIVE_SLOT_KEY, String(n));
+    if (!silent) toast(`💾 Смена сохранена · Слот ${n}`, 'good');
+    return true;
+  } catch (e) {
+    if (!silent) toast('Не удалось сохранить — хранилище недоступно', 'bad');
+    return false;
+  }
+}
+function eraseSlot(n) {
+  try { localStorage.removeItem(SAVE_KEY(n)); } catch (e) {}
+  renderSlots();
+}
+function collectSave() {
+  const pdata = [];
+  for (const p of parcels) {
+    if (G.carried && G.carried.parcel === p) { pdata.push({ id: p.id, type: p.type, carried: true }); continue; }
+    if (p.cell) { pdata.push({ id: p.id, type: p.type, cell: { s: p.cell.shelf, r: p.cell.row, c: p.cell.col } }); continue; }
+    if (p.bulkySlot != null) { pdata.push({ id: p.id, type: p.type, bulkySlot: p.bulkySlot }); continue; }
+    const m = p.mesh.position;
+    pdata.push({ id: p.id, type: p.type, x: +m.x.toFixed(2), y: +m.y.toFixed(2), z: +m.z.toFixed(2) });
+  }
+  let carried = null;
+  if (G.carried) {
+    if (G.carried.kind === 'big') carried = { kind: 'big', docScanned: !!G.carried.docScanned };
+    else if (G.carried.parcel) carried = { kind: 'parcel', id: G.carried.parcel.id, type: G.carried.parcel.type };
+  }
+  return {
+    v: 1, ts: Date.now(), slot: G.saveSlot,
+    name: G.pvzName, logo: G.pvzLogo,
+    day: G.day, money: Math.round(G.money), rep: +G.rep.toFixed(3),
+    lifetimeEarned: Math.round(G.lifetimeEarned), totalIssued: G.totalIssued,
+    hunger: Math.round(G.hunger), energy: Math.round(G.energy),
+    upgrades: { ...G.upgrades },
+    ownedLocations: [...G.ownedLocations], location: G.location,
+    inventory: [...G.inventory], layoutsByLoc: { ...G.layoutsByLoc },
+    boughtCounts: { ...boughtCounts },
+    furniture: placedFurniture.map(f => ({ id: f.id, x: +f.x.toFixed(2), z: +f.z.toFixed(2), rot: f.rot })),
+    shelves: shelves.length,
+    parcels: pdata,
+    bigBoxes: bigBoxes.map(b => { const fi = floorItems.find(i => i.mesh === b); return { docScanned: !!(fi && fi.docScanned) }; }),
+    carried,
+  };
+}
+function applySave(sp) {
+  G.pvzName = sp.name || 'У Дома';
+  G.pvzLogo = sp.logo || '📦';
+  G.day = Math.max(1, sp.day | 0);
+  G.money = +sp.money || 0;
+  G.rep = clamp(+sp.rep || BALANCE.startRep, 0, 5);
+  G.lifetimeEarned = +sp.lifetimeEarned || 0;
+  G.totalIssued = sp.totalIssued | 0;
+  G.hunger = clamp(sp.hunger == null ? 100 : sp.hunger, 0, 100);
+  G.energy = clamp(sp.energy == null ? 100 : sp.energy, 0, 100);
+  Object.assign(G.upgrades, sp.upgrades || {});
+  G.ownedLocations = [...(sp.ownedLocations || ['metro'])];
+  G.location = sp.location || 'metro';
+  G.inventory = [...(sp.inventory || [])];
+  G.layoutsByLoc = { ...(sp.layoutsByLoc || {}) };
+  for (const k of Object.keys(boughtCounts)) delete boughtCounts[k];
+  Object.assign(boughtCounts, sp.boughtCounts || {});
+  // стеллажи: 0-й построен при загрузке мира — достраиваем остальные
+  for (let i = shelves.length; i < (sp.shelves || 1); i++) addShelf(i);
+  // размещённая мебель
+  for (const f of sp.furniture || []) spawnFurnitureAt(f.id, f.x, f.z, f.rot || 0);
+  // посылки
+  for (const pd of sp.parcels || []) {
+    if (pd.carried) { const p = spawnParcel(0, 0.5, 0.96, pd.type || 'normal', pd.id); removeFromFloorItems(p); continue; }
+    if (pd.cell) {
+      const shelf = shelves[pd.cell.s];
+      const cell = shelf && shelf.cells.find(c => c.row === pd.cell.r && c.col === pd.cell.c);
+      if (cell && !cell.parcel) {
+        const p = spawnParcel(cell.x, cell.z, cell.y, pd.type || 'normal', pd.id);
+        p.cell = cell; cell.parcel = p;
+        removeFromFloorItems(p);
+      }
+      continue;
+    }
+    if (pd.bulkySlot != null) {
+      const p = spawnParcel(BULKY_RACK.x + 0.18, BULKY_RACK.z, BULKY_SLOT_Y[pd.bulkySlot] == null ? 0.44 : BULKY_SLOT_Y[pd.bulkySlot], pd.type || 'normal', pd.id);
+      p.bulkySlot = pd.bulkySlot;
+      p.mesh.rotation.y = Math.PI / 2;
+      setBlobVisible(p.mesh, false);
+      removeFromFloorItems(p);
+      continue;
+    }
+    spawnParcel(pd.x == null ? 0 : pd.x, pd.z == null ? 0.5 : pd.z, pd.y == null ? 0.96 : pd.y, pd.type || 'normal', pd.id);
+  }
+  // короба поставки у паллеты
+  for (const b of sp.bigBoxes || []) {
+    const item = spawnBigBox();
+    if (item && b.docScanned) item.docScanned = true;
+  }
+  // посылка в руках
+  if (sp.carried) {
+    if (sp.carried.kind === 'parcel') {
+      const p = parcels.find(q => q.id === sp.carried.id);
+      if (p) { G.carried = { kind: 'parcel', id: p.id, mesh: p.mesh, parcel: p }; attachCarried(p.mesh); }
+    } else if (sp.carried.kind === 'big') {
+      const item = spawnBigBox();
+      if (item) {
+        item.docScanned = !!sp.carried.docScanned;
+        removeFromArray(floorItems, item);
+        removeFromArray(bigBoxes, item.mesh);
+        G.carried = item;
+        attachCarried(item.mesh);
+      }
+    }
+  }
+  // планировка зала локации
+  const layout = (G.layoutsByLoc[G.location] != null) ? G.layoutsByLoc[G.location] : 0;
+  applyLayout(layout);
+  updateInventoryHUD();
+  parcelsDirty = true;
+}
+function slotSummary(sp) {
+  return `День ${sp.day} · ${Math.round(sp.money)} ₽ · ${(sp.rep || 0).toFixed(1)} ★`;
+}
+
+// ---------- Выбор слота сохранения в меню ----------
+let selectedSlot = 1;
+try { selectedSlot = Math.min(3, Math.max(1, +localStorage.getItem(ACTIVE_SLOT_KEY) || 1)); } catch (e) {}
+const slotRowEl = document.getElementById('slot-row');
+const slotInfoEl = document.getElementById('slot-info');
+const eraseSlotBtn = document.getElementById('btn-erase-slot');
+const newGameBtn = document.getElementById('btn-newgame');
+function selectedSlotData() { return loadSlotData(selectedSlot); }
+function renderSlots() {
+  if (!slotRowEl) return;
+  slotRowEl.innerHTML = '';
+  for (let n = 1; n <= 3; n++) {
+    const sp = loadSlotData(n);
+    const b = document.createElement('button');
+    b.className = 'slot-chip ' + (sp ? 'filled' : 'empty') + (n === selectedSlot ? ' active' : '');
+    b.innerHTML = `<span class="slot-n">Слот ${n}</span><span class="slot-d">${sp ? slotSummary(sp) : 'Пусто'}</span>`;
+    b.addEventListener('click', () => { selectedSlot = n; try { localStorage.setItem(ACTIVE_SLOT_KEY, String(n)); } catch (e) {} AudioSys.place(); renderSlots(); });
+    slotRowEl.appendChild(b);
+  }
+  const sp = selectedSlotData();
+  if (sp) {
+    slotInfoEl.textContent = `«${sp.name || 'ПВЗ'}» · День ${sp.day} · ранг «${rankName(sp.lifetimeEarned || 0)}»`;
+    eraseSlotBtn.classList.remove('hidden');
+    newGameBtn.classList.remove('hidden');
+    document.getElementById('btn-start').textContent = `Продолжить · День ${sp.day} →`;
+  } else {
+    slotInfoEl.textContent = 'Слот пуст — начнёте чистую смену';
+    eraseSlotBtn.classList.add('hidden');
+    newGameBtn.classList.add('hidden');
+    document.getElementById('btn-start').textContent = 'Открыть смену →';
+  }
+}
+if (eraseSlotBtn) eraseSlotBtn.addEventListener('click', () => {
+  const sp = selectedSlotData();
+  if (!sp) return;
+  if (confirm(`Стереть сохранение («${sp.name || 'ПВЗ'}», День ${sp.day})?`)) { eraseSlot(selectedSlot); AudioSys.denied(); }
+});
+if (newGameBtn) newGameBtn.addEventListener('click', () => {
+  const sp = selectedSlotData();
+  if (sp && !confirm(`Начать новую смену? Сохранение «${sp.name || 'ПВЗ'}» (День ${sp.day}) будет стёрто.`)) return;
+  try { localStorage.removeItem(SAVE_KEY(selectedSlot)); } catch (e) {}
+  startNewGame(selectedSlot);
+});
 
 // ============================================================
 //  Рекорды (localStorage)
@@ -1121,8 +1312,9 @@ const TYPE_INFO = {
   fragile: { sub: '⚠ ХРУПКОЕ',  color: 0xff6b3d },
   thermal: { sub: '❄ ТЕРМО',    color: 0x2ee6a8 },
   defect:  { sub: '✖ БРАК',     color: 0xe0455a },
+  bulky:   { sub: '📦 ГАБАРИТ', color: 0xffc21c },
 };
-const TYPE_SHORT = { fragile: ' · ⚠ ХРУПКОЕ', thermal: ' · ❄ ТЕРМО', defect: ' · ✖ БРАК' };
+const TYPE_SHORT = { fragile: ' · ⚠ ХРУПКОЕ', thermal: ' · ❄ ТЕРМО', defect: ' · ✖ БРАК', bulky: ' · 📦 ГАБАРИТ' };
 const floorItems = [];
 const bigBoxes = [];
 const parcels = [];
@@ -1209,11 +1401,11 @@ function rollParcelType() {
   if (r < BALANCE.defectChance + BALANCE.fragileChance + BALANCE.thermalChance) return 'thermal';
   return 'normal';
 }
-function spawnParcel(x, z, y = 0, forceType = null) {
-  const id = genOrderId();
+function spawnParcel(x, z, y = 0, forceType = null, forceId = null) {
+  const id = forceId || genOrderId();
   const type = forceType || rollParcelType();
   const color = TYPE_INFO[type].color || choice(PARCEL_COLORS);
-  const mesh = makeParcelMesh(color);
+  const mesh = type === 'bulky' ? makeBulkyMesh() : makeParcelMesh(color);
   mesh.position.set(x, y, z);
   mesh.rotation.y = rand(-0.4, 0.4);
   world.add(mesh);
@@ -1248,6 +1440,120 @@ function removeParcelWorld(parcel) {
 // ============================================================
 //  Люди (с руками и лицами)
 // ============================================================
+// ---------- Стойка «Габарит»: сюда ставят крупные заказы ----------
+let bulkyTapeTex = null;
+let bulkyTapeMat = null;
+function getBulkyTapeTexture() {
+  if (bulkyTapeTex) return bulkyTapeTex;
+  bulkyTapeTex = makeCanvas(256, 64, (g, w, h) => {
+    g.fillStyle = '#ffd60a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#17121f';
+    for (let x = -h; x < w + h; x += 32) {
+      g.beginPath();
+      g.moveTo(x, h); g.lineTo(x + h, 0); g.lineTo(x + h + 12, 0); g.lineTo(x + 12, h);
+      g.closePath(); g.fill();
+    }
+  });
+  bulkyTapeTex.wrapS = bulkyTapeTex.wrapT = THREE.RepeatWrapping;
+  return bulkyTapeTex;
+}
+function getBulkyTapeMat() {
+  if (!bulkyTapeMat) bulkyTapeMat = new THREE.MeshStandardMaterial({ map: getBulkyTapeTexture(), roughness: 0.5 });
+  return bulkyTapeMat;
+}
+function makeBulkyMesh() {
+  const g = new THREE.Group();
+  const body = boxMesh(0.74, 0.5, 0.58, 0xffc21c, { roughness: 0.5 }); body.position.y = 0.25; g.add(body);
+  const tape = boxMesh(0.76, 0.505, 0.2, 0xffffff, { roughness: 0.45 }); tape.material = getBulkyTapeMat(); tape.position.y = 0.25; g.add(tape);
+  const stencil = new THREE.Mesh(new THREE.PlaneGeometry(0.52, 0.16), new THREE.MeshBasicMaterial({
+    map: makeCanvas(256, 80, (ctx, w, h2) => {
+      ctx.fillStyle = '#ffc21c'; ctx.fillRect(0, 0, w, h2);
+      ctx.fillStyle = '#17121f'; ctx.font = '900 44px Manrope, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('ГАБАРИТ', w / 2, h2 / 2 + 2);
+    }), transparent: false }));
+  stencil.position.set(0, 0.28, 0.295); g.add(stencil);
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.7, 0.8), HIT_MAT); hit.position.y = 0.28; hit.visible = false; g.add(hit);
+  addBlobShadow(g, 0.95, 0.75);
+  return g;
+}
+function buildBulkyRack() {
+  const g = new THREE.Group();
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x3a3152, roughness: 0.4, metalness: 0.55 });
+  const boardMat = new THREE.MeshStandardMaterial({ color: 0x554a73, roughness: 0.55, metalness: 0.25 });
+  const W = 1.55, D = 0.85, H = 2.32;
+  for (const sx of [-W / 2, W / 2]) for (const sz of [-D / 2, D / 2]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, H, 0.09), frameMat);
+    post.position.set(sx, H / 2, sz); post.castShadow = true; g.add(post);
+  }
+  const boardsY = [0.34, 1.14, 1.94];
+  for (const y of boardsY) {
+    const board = new THREE.Mesh(new THREE.BoxGeometry(W, 0.07, D), boardMat);
+    board.position.set(0, y - 0.035, 0); board.receiveShadow = true; board.castShadow = true; g.add(board);
+  }
+  const back = new THREE.Mesh(new THREE.BoxGeometry(W, H, 0.05), new THREE.MeshLambertMaterial({ color: 0x2a2438 }));
+  back.position.set(0, H / 2, -D / 2 + 0.02); g.add(back);
+  // табличка ГАБАРИТ
+  const plateTex = makeCanvas(512, 128, (ctx, w, h2) => {
+    ctx.fillStyle = '#17121f'; ctx.fillRect(0, 0, w, h2);
+    ctx.fillStyle = '#ffd60a'; ctx.font = '900 62px Manrope, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('ГАБАРИТ', w / 2, h2 / 2 + 2);
+  });
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 0.32), new THREE.MeshBasicMaterial({ map: plateTex }));
+  plate.position.set(0, 2.62, 0.02); g.add(plate);
+  // полоса-предупреждение у основания
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(W + 0.06, 0.16, 0.02), new THREE.MeshStandardMaterial({ map: getBulkyTapeTexture(), roughness: 0.6 }));
+  stripe.position.set(0, 0.08, D / 2 + 0.012); g.add(stripe);
+  g.position.set(BULKY_RACK.x, 0, BULKY_RACK.z);
+  g.rotation.y = Math.PI / 2; // лицом в зал
+  world.add(g);
+  addCollider(BULKY_RACK.x - 0.5, BULKY_RACK.x + 0.5, BULKY_RACK.z - 0.9, BULKY_RACK.z + 0.9);
+  return g;
+}
+function buildFridge() {
+  const g = new THREE.Group();
+  const body = boxMesh(0.98, 1.9, 0.78, 0xdfe3ea, { roughness: 0.32, metalness: 0.6 }); body.position.y = 0.95; g.add(body);
+  const split = boxMesh(0.99, 0.025, 0.79, 0x9aa0ad, { roughness: 0.4, metalness: 0.5 }); split.position.y = 1.12; g.add(split);
+  for (const hy of [1.32, 0.78]) {
+    const handle = boxMesh(0.05, 0.34, 0.05, 0x8a8f9e, { roughness: 0.35, metalness: 0.7 });
+    handle.position.set(0.36, hy, 0.42); g.add(handle);
+  }
+  const sticker = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.16), new THREE.MeshBasicMaterial({
+    map: makeCanvas(256, 120, (ctx, w, h2) => {
+      ctx.fillStyle = '#7b2ff7'; ctx.fillRect(0, 0, w, h2);
+      ctx.fillStyle = '#ffe95c'; ctx.font = '900 44px Manrope, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('ЛАНЧ', w / 2, h2 / 2 + 2);
+    }) }));
+  sticker.position.set(-0.12, 0.62, 0.398); g.add(sticker);
+  g.position.set(FRIDGE_POS.x, 0, FRIDGE_POS.z);
+  g.rotation.y = -Math.PI / 2; // дверцей в зал
+  world.add(g);
+  addCollider(FRIDGE_POS.x - 0.5, FRIDGE_POS.x + 0.5, FRIDGE_POS.z - 0.62, FRIDGE_POS.z + 0.62);
+}
+function buildWC() {
+  const g = new THREE.Group();
+  const cabin = boxMesh(1.4, 2.28, 1.2, 0x6a35cf, { roughness: 0.55 }); cabin.position.y = 1.14; g.add(cabin);
+  const roof = boxMesh(1.5, 0.09, 1.3, 0x4a12a5, { roughness: 0.5 }); roof.position.y = 2.32; g.add(roof);
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(0.78, 1.7), new THREE.MeshStandardMaterial({ color: 0xf3eefc, roughness: 0.6 }));
+  door.position.set(0, 1.02, 0.605); g.add(door);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.35, metalness: 0.6 }));
+  knob.position.set(0.28, 1.02, 0.66); g.add(knob);
+  const signTex = makeCanvas(256, 160, (ctx, w, h2) => {
+    ctx.fillStyle = '#241a33'; ctx.fillRect(0, 0, w, h2);
+    ctx.fillStyle = '#ffe95c'; ctx.font = '900 88px Manrope, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('WC', w / 2, h2 / 2 + 2);
+  });
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.4), new THREE.MeshBasicMaterial({ map: signTex }));
+  sign.position.set(0, 2.02, 0.612); g.add(sign);
+  g.position.set(WC_POS.x, 0, WC_POS.z);
+  g.rotation.y = -Math.PI / 2; // дверью в зал
+  world.add(g);
+  addCollider(WC_POS.x - 0.65, WC_POS.x + 0.65, WC_POS.z - 0.75, WC_POS.z + 0.75);
+}
+
 function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = null, scale = 1, hair = null }) {
   const g = new THREE.Group();
   const limbMat = (c, rough = 0.8, emissive = 0x000000) => new THREE.MeshStandardMaterial({ color: c, roughness: rough, metalness: 0.02, emissive });
@@ -1602,15 +1908,16 @@ function finishQr() {
 const orderCard = document.getElementById('order-card');
 const ocFill = document.getElementById('oc-fill');
 const ocCell = document.getElementById('oc-cell');
-function setBeacon(cell) {
+function setBeaconAt(x, y, z) {
   clearBeacon();
   const geo = new THREE.CylinderGeometry(0.3, 0.42, 1.35, 12, 1, true);
   const mat = new THREE.MeshBasicMaterial({ color: 0xffd60a, transparent: true, opacity: 0.55, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false });
   const m = new THREE.Mesh(geo, mat);
-  m.position.set(cell.x, 1.75, cell.z);
+  m.position.set(x, y, z);
   scene.add(m);
   G.beacon = m;
 }
+function setBeacon(cell) { setBeaconAt(cell.x, 1.75, cell.z); }
 function clearOrderCard() {
   G.activeOrder = null;
   orderCard.classList.add('hidden');
@@ -1634,10 +1941,40 @@ function updateOrderCard() {
   } else if (o.parcel.cell) {
     ocCell.innerHTML = cellLoc(o.parcel.cell);
     if (!G.beacon) setBeacon(o.parcel.cell);
+  } else if (o.parcel.bulkySlot != null) {
+    ocCell.innerHTML = '<b>Габарит · Стойка у входа</b>';
+    if (!G.beacon) setBeaconAt(BULKY_RACK.x, 1.5, BULKY_RACK.z);
+  } else if (o.parcel.type === 'bulky') {
+    ocCell.innerHTML = '<b>Габарит · несите на стойку</b>';
+    clearBeacon();
   } else {
     ocCell.innerHTML = 'Посылка не на месте…';
     clearBeacon();
   }
+}
+
+const _compassV = new THREE.Vector3();
+function updateCompass() {
+  const el = document.getElementById('compass');
+  if (!el) return;
+  const o = G.activeOrder;
+  const parcel = o && o.parcel;
+  if (!parcel || (G.carried && G.carried.parcel === parcel)) { el.classList.add('hidden'); return; }
+  let target = null;
+  if (parcel.cell) target = _compassV.set(parcel.cell.x, 1.0, parcel.cell.z);
+  else if (parcel.bulkySlot != null) target = _compassV.set(BULKY_RACK.x + 0.2, 1.6, BULKY_RACK.z);
+  else if (parcel.mesh) target = _compassV.copy(parcel.mesh.position);
+  if (!target) { el.classList.add('hidden'); return; }
+  const p = target.clone().project(camera);
+  let x = p.x, y = p.y;
+  if (p.z > 1) { x = -x; y = -1; } // за спиной — стрелка вниз
+  const ang = Math.atan2(x, y);
+  const arrow = document.getElementById('compass-arrow');
+  if (arrow) arrow.style.transform = `rotate(${ang}rad)`;
+  const idEl = document.getElementById('compass-id'); if (idEl) idEl.textContent = parcel.id;
+  const distEl = document.getElementById('compass-dist');
+  if (distEl) distEl.textContent = Math.hypot(target.x - player.position.x, target.z - player.position.z).toFixed(0) + ' м';
+  el.classList.remove('hidden');
 }
 
 // ============================================================
@@ -1701,17 +2038,8 @@ function cancelPlacement() {
 function commitPlacement() {
   const pl = G.placing;
   if (!pl || !pl.valid) { AudioSys.denied(); return; }
-  const built = FURNITURE_FACTORY[pl.id]();
-  built.group.position.copy(pl.ghost.position);
-  built.group.position.y = 0;
-  built.group.rotation.y = pl.rot;
-  world.add(built.group);
-  if (built.collider) {
-    const c = built.collider;
-    const cos = Math.abs(Math.cos(pl.rot)), sin = Math.abs(Math.sin(pl.rot));
-    const ex = c.dx * cos + c.dz * sin, ez = c.dx * sin + c.dz * cos;
-    addCollider(built.group.position.x - ex, built.group.position.x + ex, built.group.position.z - ez, built.group.position.z + ez);
-  }
+  spawnFurnitureAt(pl.id, pl.ghost.position.x, pl.ghost.position.z, pl.rot);
+  placedFurniture.push({ id: pl.id, x: pl.ghost.position.x, z: pl.ghost.position.z, rot: pl.rot });
   const i = G.inventory.indexOf(pl.id);
   if (i >= 0) G.inventory.splice(i, 1);
   cancelPlacement();
@@ -1971,13 +2299,8 @@ function applyLayout(idx) {
   onTable.sort((a, b) => (a.mesh.position.z - b.mesh.position.z) || (a.mesh.position.x - b.mesh.position.x));
   onTable.forEach((p, i) => {
     const slot = TABLE_SLOTS[i % TABLE_SLOTS.length];
-    p.floorRow = false;
     p.mesh.position.set(TABLE_POS.x + slot.dx, 0.96, TABLE_POS.z + slot.dz);
   });
-  const dtx = TABLE_POS.x - oldTable.x, dtz = TABLE_POS.z - oldTable.z;
-  if (dtx || dtz) for (const p of parcels) {
-    if (p.floorRow) { p.mesh.position.x += dtx; p.mesh.position.z += dtz; }
-  }
   G.layoutsByLoc[G.location] = idx;
   saveLayouts();
 }
@@ -2117,63 +2440,109 @@ const SHOP_ITEMS = [
 ];
 const shopGrid = document.getElementById('shop-grid');
 const shopMoney = document.getElementById('shop-money');
+const placedFurniture = [];
+function spawnFurnitureAt(id, x, z, rot) {
+  const built = FURNITURE_FACTORY[id]();
+  built.group.position.set(x, 0, z);
+  built.group.rotation.y = rot;
+  world.add(built.group);
+  if (built.collider) {
+    const c = built.collider;
+    const cos = Math.abs(Math.cos(rot)), sin = Math.abs(Math.sin(rot));
+    const ex = c.dx * cos + c.dz * sin, ez = c.dx * sin + c.dz * cos;
+    addCollider(x - ex, x + ex, z - ez, z + ez);
+  }
+  return built;
+}
 const boughtCounts = {};
 function countBought(id) { return boughtCounts[id] || 0; }
-const SECTIONS = ['Мебель', 'Оборудование', 'Персонал', 'Продвижение'];
-
+const SHOP_SUB = {
+  shelf: 'Хранение', sofa: 'Комфорт', armchair: 'Комфорт', coatrack: 'Комфорт',
+  plant: 'Декор', palm: 'Декор', greenwall: 'Декор', rug: 'Декор', neon: 'Декор',
+  scanner: 'Сканирование', table: 'Распаковка', coffee: 'Напитки',
+  loader: 'Смена',
+  sign: 'Маркетинг', poster: 'Маркетинг',
+};
+const SECTION_DEFS = [
+  { id: 'Мебель', ico: '🪑', subs: ['Все', 'Хранение', 'Комфорт', 'Декор'] },
+  { id: 'Оборудование', ico: '🛠️', subs: ['Все', 'Сканирование', 'Распаковка', 'Напитки'] },
+  { id: 'Персонал', ico: '👷', subs: ['Все', 'Смена'] },
+  { id: 'Продвижение', ico: '📣', subs: ['Все', 'Маркетинг'] },
+];
+const shopTabsEl = document.getElementById('shop-tabs');
+const shopSubsEl = document.getElementById('shop-subs');
+let shopSection = 'Мебель';
+let shopSub = 'Все';
 function renderShop() {
   shopMoney.textContent = Math.floor(G.money) + ' ₽';
+  // вкладки разделов со счётчиками
+  shopTabsEl.innerHTML = '';
+  for (const s of SECTION_DEFS) {
+    const count = SHOP_ITEMS.filter(i => i.sec === s.id).length;
+    const b = document.createElement('button');
+    b.className = 'shop-tab' + (s.id === shopSection ? ' active' : '');
+    b.innerHTML = `<span>${s.ico}</span>${s.id}<small>${count}</small>`;
+    b.addEventListener('click', () => { shopSection = s.id; shopSub = 'Все'; renderShop(); AudioSys.place(); });
+    shopTabsEl.appendChild(b);
+  }
+  // подкатегории текущего раздела
+  const cur = SECTION_DEFS.find(s => s.id === shopSection);
+  shopSubsEl.innerHTML = '';
+  for (const sub of cur.subs) {
+    const b = document.createElement('button');
+    b.className = 'shop-sub' + (sub === shopSub ? ' active' : '');
+    b.textContent = sub;
+    b.addEventListener('click', () => { shopSub = sub; renderShop(); AudioSys.place(); });
+    shopSubsEl.appendChild(b);
+  }
+  // карточки
   shopGrid.innerHTML = '';
-  for (const section of SECTIONS) {
-    const head = document.createElement('div');
-    head.className = 'shop-section';
-    head.textContent = section;
-    shopGrid.appendChild(head);
-    for (const item of SHOP_ITEMS.filter(i => i.sec === section)) {
-      const price = item.price();
-      const owned = item.once ? G.upgrades[item.id] : false;
-      const maxed = item.canBuy ? !item.canBuy() : false;
-      const div = document.createElement('div');
-      div.className = 'shop-item';
-      const foot = owned
-        ? `<span class="si-owned">✓ ${item.ownedLabel ? item.ownedLabel() : 'Куплено'}</span>`
-        : `<span class="si-price">${price} ₽</span>`;
-      div.innerHTML = `
-        <div class="si-top"><div class="si-ico">${item.ico}</div><div class="si-name">${item.name}</div></div>
-        <div class="si-desc">${item.desc}</div>
-        <div class="si-foot">${foot}
-          <button class="si-buy" ${owned || maxed || G.money < price ? 'disabled' : ''}>
-            ${owned ? 'В наличии' : maxed ? 'Макс.' : 'Купить'}
-          </button>
-        </div>`;
-      div.querySelector('.si-buy').addEventListener('click', () => {
-        if (G.money < price) { AudioSys.denied(); return; }
-        G.money -= price;
-        if (item.id === 'shelf') {
-          item.buy();
-        } else if (item.placeable) {
-          if (item.once) G.upgrades[item.id] = true;
-          boughtCounts[item.id] = (boughtCounts[item.id] || 0) + 1;
-          G.inventory.push(item.id);
-        } else {
-          G.upgrades[item.id] = true;
-          if (item.onBuy) item.onBuy();
-        }
-        AudioSys.buy();
-        updateInventoryHUD();
-        updateHUD();
-        renderShop();
-        if (item.placeable) {
-          toast(`«${FURNITURE_NAMES[item.id]}» на складе — выберите место`, 'good');
-          document.getElementById('shop').classList.add('hidden');
-          G.screen = 'play';
-          enterPlacement(item.id);
-        } else {
-          toast(`Куплено: ${item.name}`, 'good');
-        }
-      });
-      shopGrid.appendChild(div);
-    }
+  const items = SHOP_ITEMS.filter(i => i.sec === shopSection && (shopSub === 'Все' || SHOP_SUB[i.id] === shopSub));
+  for (const item of items) {
+    const price = item.price();
+    const owned = item.once ? G.upgrades[item.id] : false;
+    const maxed = item.canBuy ? !item.canBuy() : false;
+    const div = document.createElement('div');
+    div.className = 'shop-item';
+    const foot = owned
+      ? `<span class="si-owned">✓ ${item.ownedLabel ? item.ownedLabel() : 'Куплено'}</span>`
+      : `<span class="si-price">${price} ₽</span>`;
+    div.innerHTML = `
+      <div class="si-top"><div class="si-ico">${item.ico}</div>
+        <div><div class="si-name">${item.name}</div><div class="si-sec">${item.sec} · ${SHOP_SUB[item.id] || ''}</div></div></div>
+      <div class="si-desc">${item.desc}</div>
+      <div class="si-foot">${foot}
+        <button class="si-buy" ${owned || maxed || G.money < price ? 'disabled' : ''}>
+          ${owned ? 'В наличии' : maxed ? 'Макс.' : 'Купить'}
+        </button>
+      </div>`;
+    div.querySelector('.si-buy').addEventListener('click', () => {
+      if (G.money < price) { AudioSys.denied(); return; }
+      G.money -= price;
+      if (item.id === 'shelf') {
+        item.buy();
+      } else if (item.placeable) {
+        if (item.once) G.upgrades[item.id] = true;
+        boughtCounts[item.id] = (boughtCounts[item.id] || 0) + 1;
+        G.inventory.push(item.id);
+      } else {
+        G.upgrades[item.id] = true;
+        if (item.onBuy) item.onBuy();
+      }
+      AudioSys.buy();
+      updateInventoryHUD();
+      updateHUD();
+      renderShop();
+      if (item.placeable) {
+        toast(`«${FURNITURE_NAMES[item.id]}» на складе — выберите место`, 'good');
+        document.getElementById('shop').classList.add('hidden');
+        G.screen = 'play';
+        enterPlacement(item.id);
+      } else {
+        toast(`Куплено: ${item.name}`, 'good');
+      }
+    });
+    shopGrid.appendChild(div);
   }
 }
 function openShop() {
@@ -2306,6 +2675,11 @@ function takeFromCell(cell) {
   updateOrderCard();
 }
 function placeInCell(cell) {
+  if (G.carried && G.carried.parcel && G.carried.parcel.type === 'bulky') {
+    toast('Габарит в ячейку не влезет — стойка «Габарит» у входа слева', 'warn');
+    AudioSys.denied();
+    return;
+  }
   const item = detachCarried();
   const parcel = item.parcel;
   removeFromFloorItems(parcel);
@@ -2400,12 +2774,10 @@ const PARCEL_ROW = [-0.62, 0, 0.62]; // legacy, оставлено для сов
 // чтобы они не сливались в одну точку при повторной приёмке
 const TABLE_SLOTS = [];
 for (const dz of [-0.28, 0.28]) for (const dx of [-0.62, 0, 0.62]) TABLE_SLOTS.push({ dx, dz });
-const FLOOR_SLOTS = [];
-for (const dz of [1.15, 1.7, 2.25]) for (const dx of [-1.24, -0.62, 0, 0.62, 1.24]) FLOOR_SLOTS.push({ dx, dz });
 function isTableParcel(p, tx, tz) {
-  if (p.cell) return false;
+  if (p.cell || p.bulkySlot != null) return false;
   const m = p.mesh.position;
-  return Math.abs(m.y - 0.96) < 0.2 && Math.hypot(m.x - (tx == null ? TABLE_POS.x : tx), m.z - (tz == null ? TABLE_POS.z : tz)) < 1.5;
+  return Math.hypot(m.x - (tx == null ? TABLE_POS.x : tx), m.z - (tz == null ? TABLE_POS.z : tz)) < 1.35 && m.y > 0.4;
 }
 function nearestSlotIndex(x, z, base, slots, maxDist) {
   let best = -1, bd = maxDist;
@@ -2423,15 +2795,7 @@ function claimTableSlots(list) {
   }
   return TABLE_SLOTS.map((_, i) => i).filter(i => !used.has(i));
 }
-function claimFloorSlots() {
-  const used = new Set();
-  for (const p of parcels) {
-    if (!p.floorRow) continue;
-    const i = nearestSlotIndex(p.mesh.position.x, p.mesh.position.z, TABLE_POS, FLOOR_SLOTS, 0.4);
-    if (i >= 0) used.add(i);
-  }
-  return FLOOR_SLOTS.map((_, i) => i).filter(i => !used.has(i));
-}
+
 function finishUnpack() {
   const item = detachCarried();      // снять с рук
   item.mesh.position.set(TABLE_POS.x, 0.98, TABLE_POS.z);  // и на стол
@@ -2445,26 +2809,29 @@ function finishUnpack() {
 function spawnUnpackedParcels() {
   const spawned = [];
   const freeTable = claimTableSlots(parcels.filter(p => isTableParcel(p)));
-  const freeFloor = claimFloorSlots();
   for (let i = 0; i < BALANCE.parcelsPerBox; i++) {
-    let x, z, y, floorRow = false;
+    // габарит: не чаще одного в коробе
+    const forceT = (i === 0 && Math.random() < BALANCE.bulkyChance) ? 'bulky' : null;
+    let x, z, y;
     if (freeTable.length) {
       const slot = TABLE_SLOTS[freeTable.shift()];
       x = TABLE_POS.x + slot.dx; z = TABLE_POS.z + slot.dz; y = 0.96;
     } else {
-      const slot = FLOOR_SLOTS[freeFloor.length ? freeFloor.shift() : 0];
-      x = TABLE_POS.x + slot.dx; z = TABLE_POS.z + slot.dz; y = 0; floorRow = true;
+      // стол забит — складываем аккуратной стопкой на столе (на пол не падаем!)
+      const pile = parcels.filter(p => isTableParcel(p)).length;
+      x = TABLE_POS.x + rand(-0.16, 0.16); z = TABLE_POS.z + rand(-0.16, 0.16);
+      y = 0.96 + 0.30 * Math.floor(Math.min(pile, 9) / 3);
     }
-    const p = spawnParcel(x, z, y);
-    p.floorRow = floorRow;
+    const p = spawnParcel(x, z, y, forceT);
     p.mesh.rotation.y = rand(-0.12, 0.12);
     spawned.push(p);
   }
   const defects = spawned.filter(p => p.type === 'defect').length;
   const thermal = spawned.filter(p => p.type === 'thermal').length;
-  const onFloor = spawned.filter(p => p.floorRow).length;
-  let msg = onFloor ? `Короб вскрыт: стол занят — ${onFloor} пос. на полу у стола` : 'Короб вскрыт: +3 посылки на столе';
-  if (defects) msg = `Короб вскрыт · обнаружен брак: ${defects}!`;
+  const bulky = spawned.filter(p => p.type === 'bulky').length;
+  let msg = 'Короб вскрыт: +3 посылки на столе';
+  if (bulky) msg = 'Короб вскрыт: внутри ГАБАРИТ — на стойку у входа';
+  else if (defects) msg = `Короб вскрыт · обнаружен брак: ${defects}!`;
   else if (thermal) msg = 'Короб вскрыт · есть ТЕРМО-посылки (60 с)';
   toast(msg, defects ? 'warn' : 'good');
   parcelsDirty = true;
@@ -2495,7 +2862,7 @@ function finishScan() {
   removeFromArray(parcels, parcel);
 
   const loc = locBonus();
-  const typeMul = parcel.type === 'fragile' ? BALANCE.fragilePayMul : parcel.type === 'thermal' ? BALANCE.thermalPayMul : 1;
+  const typeMul = parcel.type === 'fragile' ? BALANCE.fragilePayMul : parcel.type === 'thermal' ? BALANCE.thermalPayMul : parcel.type === 'bulky' ? BALANCE.bulkyPayMul : 1;
   const payout = Math.round((BALANCE.basePay + Math.random() * BALANCE.payRandom + (G.upgrades.coffee && Math.random() < BALANCE.tipChance ? BALANCE.tipAmount : 0)) * typeMul * loc.pay * layoutStats().check);
   G.money += payout;
   G.dayEarned += payout;
@@ -2602,6 +2969,8 @@ function handleWorldClick(root) {
       if (G.carried) { toast('Руки заняты — освободите их', 'warn'); return; }
       if (parcel.cell) {
         smartAct(new THREE.Vector3(parcel.cell.x, 0, parcel.cell.z), 1.75, () => takeFromCell(parcel.cell));
+      } else if (parcel.bulkySlot != null) {
+        smartAct(new THREE.Vector3(BULKY_RACK.x, 0, BULKY_RACK.z), 2.1, () => takeBulky(parcel));
       } else {
         const item = floorItems.find(i => i.parcel === parcel);
         if (item) smartAct(root.position, 1.45, () => pickupFloorItem(item));
@@ -2646,6 +3015,46 @@ function handleWorldClick(root) {
 }
 
 // ---------- Контекстная подсказка (E) ----------
+// ---------- Габариты: стойка у входа ----------
+function bulkyStored() { return parcels.filter(p => p.type === 'bulky' && p.bulkySlot != null); }
+function bulkyFreeSlot() {
+  const used = new Set(bulkyStored().map(p => p.bulkySlot));
+  for (let i = 0; i < BALANCE.bulkySlots; i++) if (!used.has(i)) return i;
+  return -1;
+}
+function storeBulkyCarried() {
+  const parcel = G.carried.parcel;
+  const slot = bulkyFreeSlot();
+  if (slot < 0) { toast('Стойка «Габарит» заполнена — место только под 3 посылки', 'warn'); AudioSys.denied(); return; }
+  const item = detachCarried();
+  parcel.bulkySlot = slot;
+  parcel.cell = null;
+  item.mesh.position.set(BULKY_RACK.x + 0.18, BULKY_SLOT_Y[slot], BULKY_RACK.z + rand(-0.08, 0.08));
+  item.mesh.rotation.set(0, Math.PI / 2 + rand(-0.06, 0.06), 0);
+  setBlobVisible(item.mesh, false);
+  // больше не «свободная посылка на полу» — живёт на стойке
+  for (let i = floorItems.length - 1; i >= 0; i--) if (floorItems[i].parcel === parcel) floorItems.splice(i, 1);
+  tagInteract(item.mesh, 'parcel');
+  toast(`Габарит ${parcel.id} на стойке ✓`, 'good');
+  AudioSys.place();
+  parcelsDirty = true;
+  updateHUD();
+  updateOrderCard();
+}
+function takeBulky(parcel) {
+  parcel.bulkySlot = null;
+  for (let i = floorItems.length - 1; i >= 0; i--) if (floorItems[i].parcel === parcel) floorItems.splice(i, 1);
+  untagInteract(parcel.mesh);
+  G.carried = { kind: 'parcel', id: parcel.id, mesh: parcel.mesh, parcel };
+  attachCarried(parcel.mesh);
+  AudioSys.pickup();
+  updateHUD();
+  updateOrderCard();
+}
+function nearBulkyRack() {
+  return Math.hypot(player.position.x - BULKY_RACK.x, player.position.z - BULKY_RACK.z) < 2.15;
+}
+
 function getInteraction() {
   if (G.action || G.placing) return null;
   const px = player.position.x, pz = player.position.z;
@@ -2653,7 +3062,25 @@ function getInteraction() {
   const nearTable = Math.hypot(px - TABLE_POS.x, pz - TABLE_POS.z) < 2.2;
   const nearBin = Math.hypot(px - BIN_POS.x, pz - BIN_POS.z) < 1.9;
 
+  const nearFridge = Math.hypot(px - FRIDGE_POS.x, pz - FRIDGE_POS.z) < 1.9;
+  const nearWC = Math.hypot(px - WC_POS.x, pz - WC_POS.z) < 1.9;
+
   if (!G.carried) {
+    if (nearFridge) {
+      if (G.hunger > 92) return { label: 'Вы не голодны', soft: true, action: () => toast('Сытость на максимуме', 'good') };
+      return { label: `Перекусить · ${BALANCE.eatCost} ₽ (+${BALANCE.eatHunger})`, action: useFridge };
+    }
+    if (nearWC) {
+      if (G.energy > 92) return { label: 'Вы бодры!', soft: true, action: () => toast('Бодрость на максимуме', 'good') };
+      return { label: `В туалет (+${BALANCE.wcEnergy} бодрости)`, action: useWC };
+    }
+    if (nearBulkyRack()) {
+      const wanted = G.activeOrder && G.activeOrder.parcel && G.activeOrder.parcel.type === 'bulky' ? G.activeOrder.parcel : null;
+      const stored = bulkyStored();
+      if (wanted && wanted.bulkySlot != null) return { label: `Взять габарит ${wanted.id}`, action: () => takeBulky(wanted) };
+      if (stored.length) return { label: `Взять габарит ${stored[0].id} со стойки`, action: () => takeBulky(stored[0]) };
+      return { label: 'Стойка «Габарит»', soft: true, action: () => toast('Сюда кладут крупные заказы — ячейки им не подходят', 'warn') };
+    }
     if (nearCounter) {
       const ret = waitingReturner();
       if (ret) return { label: `Оформить возврат ${ret.retId} (+${BALANCE.returnFee} ₽)`, action: () => startReturn(ret) };
@@ -2683,6 +3110,13 @@ function getInteraction() {
   }
 
   const cp = G.carried.parcel;
+  if (nearFridge || nearWC) {
+    return { label: 'Сначала положите посылку', soft: true, action: () => toast('Руки заняты — сначала посылка', 'warn') };
+  }
+  if (nearBulkyRack()) {
+    if (cp.type === 'bulky') return { label: 'Положить габарит на стойку', action: storeBulkyCarried };
+    return { label: 'На стойку — только габариты', soft: true, action: () => toast('Обычные посылки — по ячейкам стеллажа', 'warn') };
+  }
   if (nearBin) {
     if (cp.type === 'defect') return { label: `Сдать брак в контейнер (+${BALANCE.binBonus} ₽)`, action: binDefect };
     return { label: 'Контейнер только для брака', soft: true, action: () => toast('Сюда сдают только бракованные посылки', 'warn') };
@@ -2698,9 +3132,122 @@ function getInteraction() {
     }
     return { label: `Заказ ${G.carried.id} никто у стойки не ждёт`, soft: true, action: () => toast('Ни один клиент не ждёт этот заказ', 'warn') };
   }
+  if (cp.type === 'bulky') return { label: 'Габарит — на стойку у входа слева', soft: true, action: () => toast('Крупные заказы хранятся на стойке «Габарит»', 'warn') };
   const { cell, dist } = nearestFreeCell();
   if (cell && dist < 1.75) return { label: `Положить ${G.carried.id} в ячейку`, action: () => placeInCell(cell) };
   return { label: 'Ищите свободную ячейку на стеллаже', soft: true, action: () => toast('Поднесите посылку к свободной ячейке', 'warn') };
+}
+
+// ============================================================
+//  Часы смены 09:00 → 21:00, часы пик и затишья, состояние сотрудника
+// ============================================================
+const DAY_START_MIN = 9 * 60, DAY_END_MIN = 21 * 60;
+function gameMinutesNow() {
+  const frac = clamp(G.timeLeft / BALANCE.dayLength, 0, 1);
+  return DAY_END_MIN - frac * (DAY_END_MIN - DAY_START_MIN);
+}
+function fmtClock(mins) {
+  const h = Math.floor(mins / 60), m = Math.floor(mins % 60);
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+function dayPhase(mins) {
+  if (mins < 10.5 * 60)  return { id: 'lull',   label: '☕ Утро · затишье',    mul: 0.75 };
+  if (mins < 12 * 60)    return { id: 'normal', label: '🌤️ Рабочее утро',      mul: 1.0 };
+  if (mins < 14 * 60)    return { id: 'rush',   label: '🔥 Обеденный час пик', mul: 1.65 };
+  if (mins < 15.5 * 60)  return { id: 'lull',   label: '☕ Тихий час',         mul: 0.6 };
+  if (mins < 17 * 60)    return { id: 'normal', label: '🌤️ Ровный поток',      mul: 1.1 };
+  if (mins < 20 * 60)    return { id: 'rush',   label: '🔥 Вечерний час пик',  mul: 1.8 };
+  return { id: 'close',  label: '🌙 До закрытия',       mul: 0.8 };
+}
+const phaseChipEl = () => document.getElementById('phase-chip');
+function currentPhase() { return dayPhase(gameMinutesNow()); }
+
+// --- состояние сотрудника: сытость и бодрость
+function vitalsActionMul() {
+  let m = 1;
+  if (G.hunger < 35) m *= 0.88;
+  if (G.energy < 35) m *= 0.88;
+  if (G.hunger < 15 || G.energy < 15) m = Math.min(m, 0.72);
+  return m;
+}
+function vitalsMoveMul() {
+  let m = 1;
+  if (G.hunger < 15) m *= 0.9;
+  if (G.energy < 15) m *= 0.85;
+  return m;
+}
+function updateVitals(dt) {
+  if (G.screen !== 'play') return;
+  const rush = currentPhase().id === 'rush';
+  const dH = 100 / BALANCE.dayLength;
+  const dE = 100 / (BALANCE.dayLength * 1.35);
+  G.hunger = clamp(G.hunger - dH * (rush ? 1.35 : 1) * dt, 0, 100);
+  G.energy = clamp(G.energy - dE * (rush ? 2.1 : 0.8) * dt, 0, 100);
+  if (G.hunger < 35 && !G.hungerWarned) { G.hungerWarned = true; toast('🍖 Голодно — перекусите у холодильника', 'warn'); }
+  if (G.energy < 35 && !G.energyWarned) { G.energyWarned = true; toast('⚡ Вы устали — туалет освежает, кофе бодрит', 'warn'); }
+}
+function updateVitalsHUD() {
+  const h = document.getElementById('hunger-fill'); if (h) h.style.width = G.hunger + '%';
+  const e = document.getElementById('energy-fill'); if (e) e.style.width = G.energy + '%';
+  if (h && h.parentElement) h.parentElement.classList.toggle('low', G.hunger < 15);
+  if (e && e.parentElement) e.parentElement.classList.toggle('low', G.energy < 15);
+}
+
+// --- Перерыв: дверь закрыта, клиентов не будет (уборка/поставка/туалет)
+let breakBanner = null;
+function ensureBreakBanner() {
+  if (breakBanner) return breakBanner;
+  const g = new THREE.Group();
+  const board = boxMesh(2.6, 0.62, 0.08, 0xd94f30, { roughness: 0.6 }); board.position.y = 0; g.add(board);
+  const txt = makeCanvas(512, 128, (ctx, w, h2) => {
+    ctx.fillStyle = '#d94f30'; ctx.fillRect(0, 0, w, h2);
+    ctx.fillStyle = '#ffe9d6'; ctx.font = '900 64px Manrope, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('ЗАКРЫТО', w / 2, h2 / 2 + 2);
+  });
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.5), new THREE.MeshBasicMaterial({ map: txt }));
+  face.position.z = 0.045; g.add(face);
+  const face2 = face.clone(); face2.rotation.y = Math.PI; face2.position.z = -0.045; g.add(face2);
+  g.position.set(0, 2.05, ROOM.z - 0.55);
+  g.visible = false;
+  scene.add(g);
+  breakBanner = g;
+  return g;
+}
+function setBreak(on, silent) {
+  if (G.screen !== 'play' && on) return;
+  G.breakOn = on;
+  if (on) {
+    G.breakOpenAtMin = gameMinutesNow() + 120; // дверь откроется сама через 2 игровых часа
+    toast('🚪 Перерыв — дверь закрыта. Новых клиентов не будет', 'warn');
+  } else {
+    G.breakOpenAtMin = null;
+    if (!silent) toast('🔔 Дверь открыта — работаем!', 'good');
+  }
+  ensureBreakBanner().visible = on;
+  const btn = document.getElementById('btn-break');
+  if (btn) btn.classList.toggle('break-on', on);
+  const chip = document.getElementById('break-chip');
+  if (chip) chip.classList.toggle('hidden', !on);
+}
+function toggleBreak() { setBreak(!G.breakOn); }
+
+function useFridge() {
+  if (G.money < BALANCE.eatCost) { toast(`Не хватает ${BALANCE.eatCost} ₽ на перекус`, 'warn'); AudioSys.denied(); return; }
+  G.money -= BALANCE.eatCost;
+  G.hunger = clamp(G.hunger + BALANCE.eatHunger, 0, 100);
+  G.energy = clamp(G.energy + 5, 0, 100);
+  toast(`🥪 Перекусили из холодильника (+${BALANCE.eatHunger} сытости, −${BALANCE.eatCost} ₽)`, 'good');
+  AudioSys.buy();
+  updateVitalsHUD();
+  updateHUD();
+}
+function useWC() {
+  G.energy = clamp(G.energy + BALANCE.wcEnergy, 0, 100);
+  G.hunger = clamp(G.hunger - 2, 0, 100);
+  toast(`🚿 Освежились и восстановились (+${BALANCE.wcEnergy} бодрости)`, 'good');
+  AudioSys.place();
+  updateVitalsHUD();
 }
 
 // ============================================================
@@ -2727,6 +3274,13 @@ function startDay(n) {
   G.customerTimer = 5;
   G.warned10s = false;
   G.debtWarning = false;
+  G.hunger = 100; G.energy = 100;
+  G.hungerWarned = false; G.energyWarned = false;
+  G.breakOn = false; G.breakOpenAtMin = null;
+  G.lastPhaseId = 'start';
+  if (breakBanner) breakBanner.visible = false;
+  const breakBtn = document.getElementById('btn-break'); if (breakBtn) breakBtn.classList.remove('break-on');
+  const breakChip = document.getElementById('break-chip'); if (breakChip) breakChip.classList.add('hidden');
   G.screen = 'play';
   document.getElementById('day-end').classList.add('hidden');
   document.getElementById('menu').classList.add('hidden');
@@ -2734,7 +3288,7 @@ function startDay(n) {
   dayTimerFill.classList.remove('low');
   applyDayEvent();
   updateHUD();
-  if (!G.event) toast(`День ${n}. Открываемся! 🔔`, 'good');
+  if (!G.event) toast(`День ${n}. 09:00 — Открываемся! 🔔`, 'good');
 }
 function endDay() {
   G.screen = 'dayEnd';
@@ -2759,6 +3313,9 @@ function endDay() {
 
   saveRecords();
   renderRecords();
+  const autoOk = saveToSlot(G.saveSlot, true);
+  const autoEl = document.getElementById('de-autosave');
+  if (autoEl) autoEl.textContent = autoOk ? `💾 Автосохранение · слот ${G.saveSlot} ✓` : '💾 Автосейв не удался';
   document.getElementById('de-day').textContent = G.day;
   document.getElementById('de-issued').textContent = G.issuedToday;
   document.getElementById('de-earned').textContent = Math.round(G.dayEarned) + ' ₽';
@@ -2904,6 +3461,7 @@ window.addEventListener('keydown', e => {
     if (G.screen === 'play' || G.screen === 'dayEnd') openShop();
     else if (G.screen === 'shop') closeShop();
   }
+  if (e.code === 'KeyN') toggleBreak();
   if (e.code === 'Escape') {
     if (G.placing) { cancelPlacement(); return; }
     if (G.screen === 'shop') closeShop();
@@ -3005,6 +3563,7 @@ btnTouchE.addEventListener('pointerdown', e => { e.preventDefault(); doInteract(
 
 // Кнопки UI
 document.getElementById('btn-shop').addEventListener('click', () => { if (G.screen === 'play') openShop(); });
+document.getElementById('btn-break').addEventListener('click', toggleBreak);
 document.getElementById('btn-loc').addEventListener('click', () => { if (G.screen === 'play') openLocations(); });
 document.getElementById('btn-pause').addEventListener('click', () => { if (G.screen === 'play') { G.screen = 'pause'; document.getElementById('pause').classList.remove('hidden'); } });
 document.getElementById('btn-inventory').addEventListener('click', () => {
@@ -3020,6 +3579,7 @@ document.getElementById('btn-next-day').addEventListener('click', () => {
 });
 document.getElementById('btn-resume').addEventListener('click', () => { G.screen = 'play'; document.getElementById('pause').classList.add('hidden'); });
 document.getElementById('btn-pause-shop').addEventListener('click', () => { document.getElementById('pause').classList.add('hidden'); openShop(); });
+document.getElementById('btn-pause-save').addEventListener('click', () => { if (G.screen === 'pause') saveToSlot(G.saveSlot); });
 document.getElementById('btn-restart').addEventListener('click', () => window.location.reload());
 document.getElementById('btn-go-restart').addEventListener('click', () => window.location.reload());
 document.getElementById('btn-vic-restart').addEventListener('click', () => window.location.reload());
@@ -3090,8 +3650,9 @@ function updatePlayer(dt) {
   }
   const moving = Math.abs(mx) > 0.01 || Math.abs(mz) > 0.01;
   if (moving) {
-    const ix = player.position.x + mx * BALANCE.moveSpeed * dt;
-    const iz = player.position.z + mz * BALANCE.moveSpeed * dt;
+    const moveMul = vitalsMoveMul();
+    const ix = player.position.x + mx * BALANCE.moveSpeed * moveMul * dt;
+    const iz = player.position.z + mz * BALANCE.moveSpeed * moveMul * dt;
     player.position.x = ix;
     player.position.z = iz;
     resolveCollisions(player.position);
@@ -3137,7 +3698,7 @@ function updateCamera(dt) {
 }
 function updateAction(dt) {
   if (!G.action) return;
-  G.action.t += dt;
+  G.action.t += dt * vitalsActionMul();
   const frac = clamp(G.action.t / G.action.dur, 0, 1);
   document.getElementById('scan-fill').style.width = (frac * 100) + '%';
   if (frac >= 1) {
@@ -3160,9 +3721,10 @@ function updateDeliveries(dt) {
   }
 }
 function updateCustomersSpawn(dt) {
+  if (G.breakOn) { G.customerTimer = Math.max(G.customerTimer, 2); return; } // дверь закрыта — клиенты ждут снаружи
   G.customerTimer -= dt;
   if (G.customerTimer <= 0) {
-    const interval = BALANCE.customerEvery(G.day) * (G.upgrades.sign ? 0.75 : 1) * G.mods.customers / (locBonus().customers * layoutStats().stream);
+    const interval = BALANCE.customerEvery(G.day) / currentPhase().mul * (G.upgrades.sign ? 0.75 : 1) * G.mods.customers / (locBonus().customers * layoutStats().stream);
     G.customerTimer = interval * rand(0.75, 1.3);
     if (G.day >= 2 && Math.random() < BALANCE.returnChance) spawnReturner();
     else spawnCustomer();
@@ -3172,8 +3734,26 @@ function updateDayTimer(dt) {
   G.timeLeft -= dt;
   const frac = clamp(G.timeLeft / BALANCE.dayLength, 0, 1);
   dayTimerFill.style.width = (frac * 100) + '%';
-  dayTimerFill.classList.toggle('low', G.timeLeft < 15);
-  if (G.timeLeft <= 10.5 && !G.warned10s) { G.warned10s = true; toast('Осталось 10 секунд — до закрытия!', 'warn'); }
+  dayTimerFill.classList.toggle('low', G.timeLeft < 20);
+  const mins = gameMinutesNow();
+  const dayEl = document.getElementById('hud-day');
+  if (dayEl) dayEl.innerHTML = `День ${G.day} · <b>${fmtClock(mins)}</b>`;
+  // фаза дня: чип + уведомления о входе в час пик / тишину
+  const phase = dayPhase(mins);
+  if (G.lastPhaseId !== phase.id) {
+    if (phase.id === 'rush') toast(phase.label + ' — держитесь!', 'warn');
+    else if (phase.id === 'lull' && G.lastPhaseId !== 'start') toast(phase.label + ' — можно сверить поставку', 'good');
+    G.lastPhaseId = phase.id;
+  }
+  const chipEl = phaseChipEl();
+  if (chipEl) {
+    chipEl.textContent = phase.label;
+    chipEl.classList.toggle('rush', phase.id === 'rush');
+    chipEl.classList.toggle('lull', phase.id === 'lull');
+  }
+  // автооткрытие двери после перерыва
+  if (G.breakOn && G.breakOpenAtMin != null && mins >= G.breakOpenAtMin) { setBreak(false, true); toast('🔔 2 часа перерыва прошли — дверь открыта', 'good'); }
+  if (G.timeLeft <= 30 && !G.warned10s) { G.warned10s = true; toast('Через полминуты закрываемся!', 'warn'); }
   if (G.timeLeft <= 0) endDay();
 }
 const tmpV = new THREE.Vector3();
@@ -3205,6 +3785,9 @@ function updateGameplay(dt) {
   updateCustomersSpawn(dt);
   updateCustomers(dt);
   updateDayTimer(dt);
+  updateVitals(dt);
+  updateVitalsHUD();
+  updateCompass();
   updateAction(dt);
   updateThermal(dt);
   updateLoader(dt);
@@ -3279,13 +3862,33 @@ buildSeasonDecor();
 buildSnow();
 buildLightShaft();
 buildStoryProps();
+buildBulkyRack();
+buildFridge();
+buildWC();
 applyLayout(G.layoutsByLoc['metro'] != null ? G.layoutsByLoc['metro'] : 0);
 addShelf(0);
 
 // Загрузочный экран: честно отрабатываем шаги и держим минимум 1.2 с
 const bootFill = document.getElementById('boot-fill');
 const bootStatus = document.getElementById('boot-status');
+const bootTip = document.getElementById('boot-tip');
+setInterval(() => {
+  const loadingEl = document.getElementById('loading');
+  if (!bootTip || !loadingEl || loadingEl.classList.contains('done')) return;
+  bootTipIdx = (bootTipIdx + 1) % BOOT_TIPS.length;
+  bootTip.style.opacity = '0';
+  setTimeout(() => { bootTip.textContent = BOOT_TIPS[bootTipIdx]; bootTip.style.opacity = '1'; }, 160);
+}, 2100);
 const bootSteps = ['Зажигаем лампы', 'Раскладываем стеллажи', 'Заносим коробки', 'Проверяем сканер', 'Вешаем гирлянду', 'Зовём Дениса', 'Открываем витрину'];
+const BOOT_TIPS = [
+  'Совет: час пик — в обед и вечером, держитесь 🔥',
+  'Совет: габариты не влезают в ячейки — стойка «Габарит» у входа 📦',
+  'Совет: проголодались — холодильник у входа справа 🍖',
+  'Совет: устали — в WC или за кофе, скорость важна ⚡',
+  'Совет: N — закрыть дверь и спокойно разобрать поставку 🚪',
+  'Совет: сохранение слева в меню — 3 слота, автосейв в конце дня 💾',
+];
+let bootTipIdx = 0;
 let bootProgress = 0, bootDone = false;
 function bootTick(startedAt) {
   bootProgress = Math.min(100, bootProgress + rand(6, 16));
@@ -3318,14 +3921,28 @@ for (const btn of logoPicker.querySelectorAll('.logo-opt')) {
 nameInput.addEventListener('input', () => { G.pvzName = nameInput.value.trim() || 'У Дома'; });
 
 buildNameBoard(G.pvzName, G.pvzLogo);
-document.getElementById('btn-start').addEventListener('click', () => {
-  AudioSys.init();
+function startNewGame(slot) {
+  G.saveSlot = slot;
   G.pvzName = (nameInput.value || 'У Дома').trim().slice(0, 14) || 'У Дома';
   G.pvzLogo = selectedLogo;
   saveBrand();
   buildNameBoard(G.pvzName, G.pvzLogo);
   startDay(1);
   toast(`ПВЗ «${G.pvzName}» открывается! 🔔`, 'good');
+}
+document.getElementById('btn-start').addEventListener('click', () => {
+  AudioSys.init();
+  const sp = selectedSlotData();
+  if (sp) {
+    G.saveSlot = selectedSlot;
+    applySave(sp);
+    saveBrand();
+    buildNameBoard(G.pvzName, G.pvzLogo);
+    startDay(G.day);
+    toast(`С возвращением, «${G.pvzName}»! День ${G.day} 🔔`, 'good');
+  } else {
+    startNewGame(selectedSlot);
+  }
 });
 
 window.PVZ = { G, player, camera, renderer, scene, parcels, customers, shelves, floorItems, spawnCustomer, spawnReturner, getInteraction, enterPlacement, LOCATIONS, LAYOUTS, ROOM_TINTS, TABLE_POS, BIN_POS, COUNTER_POS, PALLET_POS, QUEUE_SLOTS, TABLE_SLOTS, applyLayout };
@@ -3360,6 +3977,7 @@ window.PVZ.debugForceCustomer = function () {
   return c ? c.state : 'no-customer';
 };
 renderRecords();
+renderSlots();
 updateHUD();
 camera.position.set(0, 7.6, 10);
 camera.lookAt(0, 0.4, 0);
