@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ПВЗ: С нуля — симулятор сотрудника пункта выдачи</title>
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#7b2ff7">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ПВЗ: С Нуля">
+<meta name="description" content="3D-симулятор сотрудника пункта выдачи Wildberries-стиля. Поставки, QR-выдача, мебель и свой ПВЗ — от метро до флагмана.">
+<link rel="stylesheet" href="style.css">
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (e) { console.warn('[pvz] sw fail', e); });
+    });
+  }
+</script>
+</head>
+<body>
+
+<div id="app">
+  <canvas id="game-canvas"></canvas>
+
+  <!-- Загрузка -->
+  <div id="loading">
+    <div class="boot-floats" aria-hidden="true">
+      <span style="left:9%;top:16%;animation-delay:-1s">📦</span>
+      <span style="left:84%;top:24%;animation-delay:-3.4s">🎁</span>
+      <span style="left:16%;top:72%;animation-delay:-5.2s">🥡</span>
+      <span style="left:88%;top:66%;animation-delay:-2.2s">🟡</span>
+      <span style="left:38%;top:10%;animation-delay:-4.1s">💜</span>
+    </div>
+    <div class="boot-inner">
+      <div class="boot-conveyor" aria-hidden="true"><div class="boot-belt"></div><div class="boot-box">📦</div></div>
+      <div class="boot-logo"><span class="boot-logo-box">📦</span></div>
+      <div class="boot-title">ПВЗ: <span>С НУЛЯ</span></div>
+      <div class="boot-tag">пункт выдачи, который вы построите сами</div>
+      <div class="boot-bar"><div id="boot-fill"></div></div>
+      <div id="boot-status">Зажигаем лампы</div>
+      <div id="boot-tip" class="boot-tip">Совет: час пик в обед и вечером — держитесь 🔥</div>
+      <div class="boot-ver">WILDBERRIES-STYLE · v0.9</div>
+    </div>
+  </div>
+
+  <!-- Пузыри заказов над клиентами -->
+  <div id="bubbles"></div>
+
+  <!-- HUD -->
+  <div id="vignette"></div>
+  <div id="hud" class="hidden">
+    <div id="hud-left" class="panel">
+      <div class="hud-brand">
+        <span id="hud-logo">📦</span>
+        <span id="hud-name">ПВЗ «У Дома»<small>пункт выдачи</small></span>
+      </div>
+      <div class="hud-row"><span class="hud-ico">₽</span><span id="hud-money">400</span></div>
+      <div class="hud-row"><span class="hud-ico">⭐</span><span id="hud-rep">4.2</span><div id="rep-bar"><div id="rep-fill"></div></div></div>
+      <div class="hud-row small"><span id="hud-rank">Стажировка</span></div>
+    </div>
+    <div id="hud-center">
+      <div id="hud-day">День 1 · 09:00</div>
+      <div id="day-timer"><div id="day-timer-fill"></div></div>
+      <div id="hud-chips"><span id="hud-issued">Выдано: 0</span><span id="phase-chip">🌤️ Утро</span><span id="break-chip" class="hidden">🚪 Перерыв</span><span id="combo-chip" class="hidden">🔥 Комбо ×2</span></div>
+      <div id="hud-event"></div>
+    </div>
+    <div id="hud-right">
+      <button id="btn-shop" class="hud-btn">🛒<kbd>B</kbd></button>
+      <button id="btn-loc" class="hud-btn">🏠</button>
+      <button id="btn-inventory" class="hud-btn hidden">🪑 Склад<span id="inv-count" class="badge">0</span></button>
+      <button id="btn-break" class="hud-btn" title="Перерыв — дверь закрыта">🚪<kbd>N</kbd></button>
+      <button id="btn-pause" class="hud-btn">⏸<kbd>Esc</kbd></button>
+    </div>
+
+    <div id="order-card" class="hidden">
+      <div id="oc-title">Заказ клиента</div>
+      <div id="oc-id">WB-0000</div>
+      <div id="oc-cell">Стеллаж 1 · ячейка A1</div>
+      <div class="oc-patience"><i id="oc-fill"></i></div>
+    </div>
+
+    <div id="vitals" class="panel">
+      <div class="vital-row"><span class="vital-ico">🍖</span><div class="vital-bar hunger"><i id="hunger-fill"></i></div></div>
+      <div class="vital-row"><span class="vital-ico">⚡</span><div class="vital-bar energy"><i id="energy-fill"></i></div></div>
+    </div>
+    <div id="compass" class="hidden"><div id="compass-arrow">↑</div><div class="compass-txt"><b id="compass-id">WB-0000</b><span id="compass-dist">0 м</span></div></div>
+    <div id="build-hint" class="hidden">🖱 Клик — поставить &nbsp;·&nbsp; <kbd>R</kbd> — повернуть &nbsp;·&nbsp; Esc — отмена</div>
+    <div id="carried" class="hidden"><span id="carried-ico">📦</span><span id="carried-text"></span></div>
+    <div id="interact-prompt" class="hidden"><kbd>E</kbd> <span id="interact-text"></span></div>
+    <div id="scan-progress" class="hidden"><div id="scan-label">Сканирование…</div><div class="bar"><div id="scan-fill"></div></div></div>
+    <div id="toasts"></div>
+  </div>
+
+  <!-- Сенсорное управление -->
+  <div id="touch-ui" class="hidden">
+    <div id="joystick"><div id="joy-nub"></div></div>
+    <button id="btn-touch-e" aria-label="Действие">E</button>
+  </div>
+
+  <!-- Главное меню -->
+  <div id="menu" class="overlay hidden">
+    <div class="float-parcel" style="left:56%;top:12%">📦</div>
+    <div class="float-parcel" style="left:82%;top:58%;animation-delay:-2s">🎁</div>
+    <div class="float-parcel" style="left:64%;top:76%;animation-delay:-4.4s">🥡</div>
+
+    <div class="menu-wrap">
+      <div class="menu-card">
+        <div class="menu-badge">СИМУЛЯТОР ПВЗ · 3D</div>
+        <h1 class="menu-title">ПВЗ:<br><span>С НУЛЯ</span></h1>
+        <p class="menu-story">Вы — новый сотрудник пункта выдачи Wildberries-стиля. Пустой бетон, один стеллаж и амбиции. Распаковывайте поставки, раскладывайте по ячейкам, сканируйте QR клиентов, выдавайте заказы и постройте флагманский ПВЗ района.</p>
+
+        <div class="menu-panel">
+          <label class="menu-field-label" for="pvz-name">Название вашего ПВЗ</label>
+          <input id="pvz-name" maxlength="14" value="У Дома" autocomplete="off" spellcheck="false" placeholder="У Дома">
+          <div class="logo-picker" id="logo-picker">
+            <button class="logo-opt selected" data-mark="📦" aria-label="Коробка">📦</button>
+            <button class="logo-opt" data-mark="⚡" aria-label="Молния">⚡</button>
+            <button class="logo-opt" data-mark="⭐" aria-label="Звезда">⭐</button>
+            <button class="logo-opt" data-mark="🦊" aria-label="Лиса">🦊</button>
+            <button class="logo-opt" data-mark="🌿" aria-label="Лист">🌿</button>
+          </div>
+          <div class="slot-block">
+            <div class="menu-field-label">Сохранение</div>
+            <div class="slot-row" id="slot-row"></div>
+            <div class="slot-foot"><span id="slot-info">Слот пуст — начнёте чистую смену</span><button id="btn-erase-slot" class="mini-btn hidden">Стереть</button></div>
+            <button id="btn-newgame" class="newgame-link hidden">↺ Новая смена (перезапишет слот)</button>
+          </div>
+        </div>
+
+        <button id="btn-start" class="big-btn menu-cta">Открыть смену →</button>
+        <div class="menu-foot" id="menu-records">Рекорд ещё не установлен — станьте первым!</div>
+        <div class="menu-foot">WASD — бег · E — действие · клик по посылке — взять · B — магазин · <span id="app-version">v0.10</span></div>
+      </div>
+
+      <div class="menu-side">
+        <div class="side-card">
+          <div class="side-title">Как устроен день</div>
+          <div class="steps">
+            <div class="step"><div class="step-num">1</div><div>Поставка приезжает к паллете — отсканируйте ТТН и распакуйте короб</div></div>
+            <div class="step"><div class="step-num">2</div><div>Разложите заказы по ячейкам — глаз напротив клика</div></div>
+            <div class="step"><div class="step-num">3</div><div>Клиент у стойки: сканируйте его QR — игрой увидите номер места заказа</div></div>
+            <div class="step"><div class="step-num">4</div><div>Найдите заказ, отнесите на стойку, выдайте и получите деньги</div></div>
+          </div>
+        </div>
+        <div class="side-card">
+          <div class="side-title">Что ждёт внутри</div>
+          <div class="chips">
+            <span class="chip">🔥 События дня</span><span class="chip">❄️ Термолетучки</span><span class="chip">⚠️ Хрупкое</span>
+            <span class="chip">↩️ Возвраты</span><span class="chip">👷 Найм сотрудников</span><span class="chip">🏠 Покупка помещений</span>
+            <span class="chip">🪑 Мебель и размещение</span><span class="chip">🏆 Ранги и рекорды</span><span class="chip">🎄 Предновогодняя атмосфера</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Магазин -->
+  <div id="shop" class="overlay hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h2>🛒 Магазин</h2><div id="shop-money" class="shop-money">0 ₽</div></div>
+      <div id="shop-tabs"></div>
+      <div id="shop-subs"></div>
+      <div id="shop-grid"></div>
+      <button id="btn-shop-close" class="big-btn small">Закрыть <kbd>B</kbd></button>
+    </div>
+  </div>
+
+  <!-- Помещения -->
+  <div id="locations" class="overlay hidden">
+    <div class="modal-card wide">
+      <div class="modal-head"><h2>🏠 Помещения</h2><div class="shop-money" id="loc-money">0 ₽</div></div>
+      <div class="loc-note">Аренда комнаты у метро — <b>350 ₽</b> + <b>60 ₽</b> ЖКХ каждый день, списываются в конце смены. В своих помещениях платите только 60 ₽ ЖКХ, а районные бонусы работают навсегда.</div>
+      <div id="loc-grid" class="loc-grid"></div>
+      <button id="btn-loc-close" class="big-btn small">Готово</button>
+    </div>
+  </div>
+
+  <!-- Итоги дня -->
+  <div id="day-end" class="overlay hidden">
+    <div class="modal-card">
+      <h2>🌙 Смена окончена — День <span id="de-day">1</span></h2>
+      <div class="stats-grid">
+        <div class="stat"><div class="stat-num" id="de-issued">0</div><div class="stat-lbl">заказов выдано</div></div>
+        <div class="stat"><div class="stat-num" id="de-earned">0 ₽</div><div class="stat-lbl">выручка за день</div></div>
+        <div class="stat"><div class="stat-num" id="de-angry">0</div><div class="stat-lbl">ушли недовольными</div></div>
+        <div class="stat"><div class="stat-num" id="de-rep">4.0 ★</div><div class="stat-lbl">репутация</div></div>
+      </div>
+      <div class="rank-line">Ранг: <b id="de-rank">Стажировка</b></div>
+      <div class="de-autosave" id="de-autosave">💾 Автосохранение…</div>
+      <div class="de-finance">
+        <span>Аренда и ЖКХ: <b id="de-costs">−410 ₽</b></span>
+        <span>Чаевые за смену: <b id="de-tips">0 ₽</b></span>
+        <span>Чистыми за смену: <b id="de-net">0 ₽</b></span>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-de-shop" class="ghost-btn">🛒 Улучшения</button>
+        <button id="btn-de-loc" class="ghost-btn">🏠 Помещения</button>
+        <button id="btn-next-day" class="big-btn small">Начать день <span id="de-next">2</span> →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Пауза -->
+  <div id="pause" class="overlay hidden">
+    <div class="modal-card narrow">
+      <h2>⏸ Пауза</h2>
+      <p class="dim">ПВЗ подождёт. Клиенты — нет (шутка, всё заморожено).</p>
+      <div class="modal-actions col">
+        <button id="btn-resume" class="big-btn small">Продолжить</button>
+        <button id="btn-pause-shop" class="ghost-btn">🛒 Магазин</button>
+        <button id="btn-pause-save" class="ghost-btn">💾 Сохранить смену</button>
+        <button id="btn-restart" class="ghost-btn danger">↺ Начать заново</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Поражение -->
+  <div id="gameover" class="overlay hidden">
+    <div class="modal-card">
+      <div class="end-emoji">🏚️</div>
+      <h2>ПВЗ закрыт</h2>
+      <p class="dim">Репутация упала до <b>1.0 ★</b>. Арендодатель расторг договор, а соседи ушли заказывать в соседний дом. Бывает и такое.</p>
+      <div class="rank-line">Итог: <b id="go-earned">0 ₽</b> за всё время, ранг «<b id="go-rank">—</b>»</div>
+      <button id="btn-go-restart" class="big-btn">↻ Наняться заново</button>
+    </div>
+  </div>
+
+  <!-- Победа -->
+  <div id="victory" class="overlay hidden">
+    <div class="modal-card">
+      <div class="end-emoji">🏆</div>
+      <h2>Золотой ПВЗ!</h2>
+      <p class="dim">Репутация <b>5.0 ★</b> — очередь до самого лифта, а поставки ждут вашего прихода. Район обречён на вашу внимательность.</p>
+      <div class="rank-line">Выручка: <b id="vic-earned">0 ₽</b> · Ранг: «<b id="vic-rank">Флагманский ПВЗ</b>»</div>
+      <div class="modal-actions">
+        <button id="btn-vic-continue" class="big-btn small">Продолжить бесконечную смену →</button>
+        <button id="btn-vic-restart" class="ghost-btn">↺ Сыграть заново</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="vendor/roundedbox.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
