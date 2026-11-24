@@ -10,6 +10,37 @@
 const HIT_MAT = new THREE.MeshBasicMaterial({ visible: false });
 const HIT_BOX = new THREE.BoxGeometry(0.72, 0.72, 0.72);
 
+// Контактная тень-«блин»: дёшево вместо SSAO, сильно заземляет объекты
+let blobMat = null;
+const blobGeo = new THREE.PlaneGeometry(1, 1);
+function getBlobMat() {
+  if (!blobMat) {
+    const tex = makeCanvas(128, 128, (g, w, h) => {
+      const grad = g.createRadialGradient(w / 2, h / 2, 6, w / 2, h / 2, w / 2);
+      grad.addColorStop(0, 'rgba(0,0,0,0.48)');
+      grad.addColorStop(0.55, 'rgba(0,0,0,0.26)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grad; g.fillRect(0, 0, w, h);
+    });
+    blobMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+  }
+  return blobMat;
+}
+function addBlobShadow(mesh, w = 1.02, d = 0.8) {
+  const m = new THREE.Mesh(blobGeo, getBlobMat());
+  m.rotation.x = -Math.PI / 2;
+  m.scale.set(w, d, 1);
+  m.position.y = 0.017;
+  m.renderOrder = 1;
+  m.name = 'blobShadow';
+  mesh.add(m);
+  return m;
+}
+function setBlobVisible(mesh, v) {
+  const b = mesh.getObjectByName('blobShadow');
+  if (b) b.visible = v;
+}
+
 // ---------- PBR-материалы: Lambert/Phong трактуем как Standard (иначе всё выглядит плоско) ----------
 (function upgradeLegacyMaterials() {
   const mk = (defRough, defMetal) => function (params) {
@@ -317,12 +348,39 @@ const TEX = {
     });
   },
   rug() {
-    return makeCanvas(256, 256, (g, w, h) => {
-      g.fillStyle = '#ffd60a'; g.fillRect(0, 0, w, h);
-      g.strokeStyle = '#7b2ff7'; g.lineWidth = 18; g.strokeRect(12, 12, w - 24, h - 24);
-      g.lineWidth = 5; g.strokeRect(34, 34, w - 68, h - 68);
-      g.fillStyle = '#7b2ff7';
-      g.save(); g.translate(w / 2, h / 2); g.rotate(Math.PI / 4); g.fillRect(-40, -40, 80, 80); g.restore();
+    return makeCanvas(512, 320, (g, w, h) => {
+      // база — плотное жёлтое полотно
+      g.fillStyle = '#f7c948'; g.fillRect(0, 0, w, h);
+      // шум волокон
+      for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(120,80,0,${Math.random() * 0.14})`; g.fillRect(Math.random() * w, Math.random() * h, 3, 1.5); }
+      // внешняя фиолетовая кайма
+      g.strokeStyle = '#7b2ff7'; g.lineWidth = 34; g.strokeRect(20, 20, w - 40, h - 40);
+      // прошивка пунктиром поверх каймы
+      g.strokeStyle = '#ffd60a'; g.lineWidth = 3; g.setLineDash([14, 10]); g.strokeRect(38, 38, w - 76, h - 76); g.setLineDash([]);
+      // тонкая внутренняя линия
+      g.strokeStyle = '#5a1fd0'; g.lineWidth = 5; g.strokeRect(64, 64, w - 128, h - 128);
+      // угловые медальоны
+      const medallion = (x, y) => {
+        g.save(); g.translate(x, y); g.rotate(Math.PI / 4);
+        g.fillStyle = '#7b2ff7'; g.fillRect(-26, -26, 52, 52);
+        g.fillStyle = '#ffd60a'; g.fillRect(-16, -16, 32, 32);
+        g.fillStyle = '#7b2ff7'; g.fillRect(-6, -6, 12, 12);
+        g.restore();
+      };
+      medallion(104, 100); medallion(w - 104, 100); medallion(104, h - 100); medallion(w - 104, h - 100);
+      // центральный ромб с монограммой
+      g.save(); g.translate(w / 2, h / 2);
+      g.rotate(Math.PI / 4);
+      g.fillStyle = '#7b2ff7'; g.fillRect(-64, -64, 128, 128);
+      g.fillStyle = '#ffd60a'; g.fillRect(-44, -44, 88, 88);
+      g.fillStyle = '#7b2ff7'; g.fillRect(-24, -24, 48, 48);
+      g.rotate(-Math.PI / 4);
+      g.fillStyle = '#ffd60a'; g.font = '900 34px Arial Black, Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('WB', 0, 2);
+      g.restore();
+      // бахрома слева и справа
+      g.strokeStyle = '#7b2ff7'; g.lineWidth = 4;
+      for (let y = 26; y < h - 20; y += 12) { g.beginPath(); g.moveTo(6, y); g.lineTo(18, y); g.stroke(); g.beginPath(); g.moveTo(w - 18, y); g.lineTo(w - 6, y); g.stroke(); }
     });
   },
   rugB() { // ковёр премиум: глубокий красный + золото
@@ -627,6 +685,66 @@ function buildSeasonDecor() {
   });
 }
 
+// Солнечный луч и пылинки — «киношный» воздух в зале
+let dust = null, dustSeed = null;
+const shaftMats = [];
+function buildLightShaft() {
+  const gradTex = makeCanvas(64, 256, (g, w, h) => {
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(255, 236, 190, 0.85)');
+    grad.addColorStop(0.65, 'rgba(255, 236, 190, 0.18)');
+    grad.addColorStop(1, 'rgba(255, 236, 190, 0)');
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+  });
+  for (const [x, rotZ, op] of [[-3.4, 0.16, 0.085], [2.6, -0.14, 0.065]]) {
+    const shaft = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 6.2),
+      new THREE.MeshBasicMaterial({ map: gradTex, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false })
+    );
+    shaft.position.set(x, 1.85, 3.15);
+    shaft.rotation.set(-0.72, 0, rotZ);
+    shaft.renderOrder = 2;
+    world.add(shaft);
+    shaftMats.push(shaft.material);
+  }
+  // пылинки
+  const N = 80;
+  const pos = new Float32Array(N * 3);
+  dustSeed = new Float32Array(N * 2);
+  for (let i = 0; i < N; i++) {
+    pos[i * 3] = rand(-7.5, 7.5);
+    pos[i * 3 + 1] = rand(0.3, 2.9);
+    pos[i * 3 + 2] = rand(-4.8, 4.5);
+    dustSeed[i * 2] = rand(0.1, 0.5);
+    dustSeed[i * 2 + 1] = rand(0, Math.PI * 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const dotTex = makeCanvas(32, 32, (g, w, h) => {
+    const grad = g.createRadialGradient(w / 2, h / 2, 1, w / 2, h / 2, w / 2);
+    grad.addColorStop(0, 'rgba(255,240,205,1)');
+    grad.addColorStop(1, 'rgba(255,240,205,0)');
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+  });
+  dust = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.055, map: dotTex, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
+  dust.renderOrder = 2;
+  world.add(dust);
+}
+function updateDust(dt, t) {
+  if (!dust) return;
+  const pos = dust.geometry.attributes.position.array;
+  for (let i = 0; i < dustSeed.length / 2; i++) {
+    const sp = dustSeed[i * 2], ph = dustSeed[i * 2 + 1];
+    pos[i * 3] += Math.sin(t * 0.35 + ph) * 0.03 * dt + 0.008 * dt;
+    pos[i * 3 + 1] += Math.cos(t * 0.28 + ph * 1.7) * 0.02 * dt;
+    pos[i * 3 + 2] += Math.cos(t * 0.3 + ph) * 0.025 * dt;
+    if (pos[i * 3] > 8) pos[i * 3] = -8;
+    if (pos[i * 3 + 1] > 3.1) pos[i * 3 + 1] = 0.3;
+    if (pos[i * 3 + 1] < 0.2) pos[i * 3 + 1] = 2.9;
+  }
+  dust.geometry.attributes.position.needsUpdate = true;
+}
+
 // Падающий снег снаружи витрины
 let snow = null, snowSpeeds = null;
 function buildSnow() {
@@ -679,9 +797,30 @@ function buildCounter() {
   const g = new THREE.Group();
   const base = boxMesh(2.8, 1.0, 0.95, 0x4a3b66); base.position.y = 0.5; g.add(base);
   const panel = boxMesh(2.6, 0.7, 0.04, 0x5b4a80); panel.position.set(0, 0.55, 0.49); g.add(panel);
-  const top = boxMesh(3.0, 0.09, 1.1, 0xffd60a); top.position.y = 1.05; g.add(top);
+  const top = new THREE.Mesh(new THREE.RoundedBoxGeometry(3.0, 0.09, 1.1, 2, 0.035),
+    new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.24, metalness: 0.88, emissive: 0x2e1c00 }));
+  top.position.y = 1.05; top.castShadow = true; top.receiveShadow = true; g.add(top);
   const stripe = boxMesh(2.8, 0.16, 0.02, 0x7b2ff7); stripe.position.set(0, 0.72, 0.52); g.add(stripe);
   const term = boxMesh(0.42, 0.3, 0.06, 0x17121f); term.position.set(-1.0, 1.37, 0.2); term.rotation.x = -0.25; g.add(term);
+  if (!window.__qrScreenTex) {
+    window.__qrScreenTex = makeCanvas(128, 96, (g, w, h) => {
+      g.fillStyle = '#06180e'; g.fillRect(0, 0, w, h);
+      g.strokeStyle = 'rgba(70,255,150,0.25)';
+      for (let y = 8; y < h - 10; y += 6) { g.beginPath(); g.moveTo(8, y); g.lineTo(w - 8, y); g.stroke(); }
+      // QR-подобная матрица
+      g.fillStyle = '#46ff96';
+      const cell = 6, ox = 14, oy = 10;
+      const rng = (i) => ((i * 2654435761) >>> 0) % 100 < 46;
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if (rng(r * 31 + c * 7 + 13)) g.fillRect(ox + c * cell, oy + r * cell, cell - 1.5, cell - 1.5);
+      // уголки-«поисковики» QR
+      const finder = (x, y) => { g.fillStyle = '#46ff96'; g.fillRect(x, y, 15, 15); g.fillStyle = '#06180e'; g.fillRect(x + 3, y + 3, 9, 9); g.fillStyle = '#46ff96'; g.fillRect(x + 5.5, y + 5.5, 4, 4); };
+      finder(w - 26, 8); finder(10, h - 22);
+      g.fillStyle = 'rgba(70,255,150,0.9)'; g.font = 'bold 11px monospace';
+      g.fillText('WB·QR', 44, h - 8);
+    });
+  }
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.26), new THREE.MeshBasicMaterial({ map: window.__qrScreenTex }));
+  screen.position.set(0, 0, 0.032); term.add(screen);
   const termStand = cylMesh(0.03, 0.05, 0.28, 0x2b233c); termStand.position.set(-1.0, 1.22, 0.2); g.add(termStand);
   g.position.set(COUNTER_POS.x, 0, COUNTER_POS.z);
   world.add(g);
@@ -947,6 +1086,7 @@ function makeBigBoxMesh() {
     return pivot;
   };
   const hit = new THREE.Mesh(new THREE.BoxGeometry(1.15, 1.0, 0.95), HIT_MAT); hit.position.y = 0.42; g.add(hit);
+  addBlobShadow(g, 1.35, 1.1);
   const front = mkFlap(0.93, 0.05, 0.35, 0, 0.36, 0, -0.175);
   const back = mkFlap(0.93, 0.05, 0.35, 0, -0.36, 0, 0.175);
   const left = mkFlap(0.35, 0.05, 0.62, -0.475, 0, 0.175, 0);
@@ -975,11 +1115,28 @@ function spawnBigBox() {
   tagInteract(mesh, 'bigbox');
   return item;
 }
+let wbTapeMat = null;
+function getWBTapeMat() {
+  if (!wbTapeMat) {
+    const tex = makeCanvas(256, 64, (g, w, h) => {
+      g.fillStyle = '#ffd60a'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#7b2ff7';
+      for (let x = 0; x < w; x += 86) { g.font = '900 34px Arial Black, Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('WB', x + 43, h / 2 + 1); }
+      g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(0, 0, w, 4); g.fillRect(0, h - 4, w, 4);
+    });
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    wbTapeMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45, metalness: 0.05 });
+  }
+  return wbTapeMat;
+}
 function makeParcelMesh(color) {
   const g = new THREE.Group();
   const body = boxMesh(0.5, 0.34, 0.4, color, { roughness: 0.55 }); body.position.y = 0.17; g.add(body);
-  const tape = boxMesh(0.52, 0.345, 0.13, shade(color, -0.35), { roughness: 0.4 }); tape.position.y = 0.17; g.add(tape);
+  const tape = boxMesh(0.52, 0.345, 0.13, shade(color, -0.35), { roughness: 0.4 });
+  if (Math.random() < 0.45) tape.material = getWBTapeMat();
+  tape.position.y = 0.17; g.add(tape);
   const hit = new THREE.Mesh(HIT_BOX, HIT_MAT); hit.position.y = 0.2; g.add(hit);
+  addBlobShadow(g, 0.66, 0.52);
   return g;
 }
 function shade(hex, amt) {
@@ -1035,15 +1192,16 @@ function removeParcelWorld(parcel) {
 // ============================================================
 function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = null, scale = 1, hair = null }) {
   const g = new THREE.Group();
-  const limbMat = (c, rough = 0.8) => new THREE.MeshStandardMaterial({ color: c, roughness: rough, metalness: 0.02 });
+  const limbMat = (c, rough = 0.8, emissive = 0x000000) => new THREE.MeshStandardMaterial({ color: c, roughness: rough, metalness: 0.02, emissive });
+  const skinMat = (c, rough = 0.6) => limbMat(c, rough, 0x1a0d07);
   // ---- ноги: группы в тазобедренных суставах, качание естественнее ----
   const hipY = 0.86;
   const mkLeg = (side) => {
     const hip = new THREE.Group();
     hip.position.set(0.135 * side, hipY, 0);
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.075, 0.40, 14), limbMat(pants));
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.075, 0.40, 14), limbMat(pants, 0.8));
     thigh.position.y = -0.20; thigh.castShadow = true; hip.add(thigh);
-    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.058, 0.35, 14), limbMat(pants));
+    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.058, 0.35, 14), limbMat(pants, 0.8));
     shin.position.y = -0.555; shin.castShadow = true; hip.add(shin);
     const shoe = boxMesh(0.17, 0.085, 0.30, 0x241f2e, { roughness: 0.45 }); shoe.position.set(0, -0.795, 0.055); hip.add(shoe);
     g.add(hip);
@@ -1056,10 +1214,12 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
   const collar = boxMesh(0.24, 0.05, 0.275, 0xf6f2ea, { roughness: 0.6 }); collar.position.y = 1.455; g.add(collar);
   const belt = boxMesh(0.435, 0.06, 0.255, 0x241640, { roughness: 0.6 }); belt.position.y = 0.92; g.add(belt);
   // ---- шея и голова ----
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.1, 10), limbMat(skin, 0.75));
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.1, 10), skinMat(skin, 0.72));
   neck.position.y = 1.49; neck.castShadow = true; g.add(neck);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.158, 20, 16), limbMat(skin, 0.62));
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.158, 20, 16), skinMat(skin, 0.58));
   head.position.y = 1.60; head.castShadow = true; g.add(head);
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.017, 8, 6), limbMat(shade(skin, -0.18), 0.6));
+  nose.position.set(0, 1.583, 0.152); g.add(nose);
   // глаза: белок + зрачок, спокойное дружеское лицо
   const white = new THREE.MeshBasicMaterial({ color: 0xfdfbf7 });
   const pupil = new THREE.MeshBasicMaterial({ color: 0x241f2e });
@@ -1096,9 +1256,9 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
     pad.position.y = 0.012; pad.castShadow = true; shoulder.add(pad);
     const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.052, 0.28, 12), limbMat(body, 0.78));
     upper.position.y = -0.165; upper.castShadow = true; shoulder.add(upper);
-    const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.049, 0.045, 0.25, 12), limbMat(skin, 0.7));
+    const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.049, 0.045, 0.25, 12), skinMat(skin, 0.66));
     fore.position.y = -0.42; fore.castShadow = true; shoulder.add(fore);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.063, 12, 10), limbMat(skin, 0.6));
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.063, 12, 10), skinMat(skin, 0.55));
     hand.position.y = -0.565; hand.castShadow = true; shoulder.add(hand);
     shoulder.rotation.z = side * 0.17;
     g.add(shoulder);
@@ -1106,6 +1266,7 @@ function makePerson({ body = 0x7b2ff7, skin = 0xf2c9a0, pants = 0x2b233c, hat = 
   };
   const armL = mkArm(-1), armR = mkArm(1);
   g.scale.setScalar(scale);
+  addBlobShadow(g, 1.04, 0.8);
   g.userData.legs = [legL, legR];
   g.userData.arms = [armL, armR];
   return g;
@@ -2014,6 +2175,7 @@ function pickupFloorItem(item) {
   updateHUD();
 }
 function attachCarried(mesh) {
+  setBlobVisible(mesh, false);
   if (mesh.parent) mesh.parent.remove(mesh);
   mesh.position.set(0, 0.92, 0.34);
   mesh.rotation.set(0, 0, 0);
@@ -2021,6 +2183,7 @@ function attachCarried(mesh) {
 }
 function detachCarried() {
   const item = G.carried;
+  setBlobVisible(item.mesh, true);
   player.remove(item.mesh);
   world.add(item.mesh);
   tagInteract(item.mesh, item.kind === 'big' ? 'bigbox' : 'parcel');
@@ -2047,6 +2210,7 @@ function placeInCell(cell) {
   const parcel = item.parcel;
   removeFromFloorItems(parcel);
   untagInteract(parcel.mesh);
+  setBlobVisible(parcel.mesh, true);
   parcel.mesh.position.set(cell.x, cell.y, cell.z);
   parcel.mesh.rotation.y = rand(-0.15, 0.15);
   parcel.cell = cell;
@@ -2609,6 +2773,7 @@ function updateLoader(dt) {
 }
 function attachCarriedTo(L, mesh) {
   mesh.visible = true;
+  setBlobVisible(mesh, false);
   if (mesh.parent) mesh.parent.remove(mesh);
   mesh.position.set(0, 0.92, 0.34);
   mesh.rotation.set(0, 0, 0);
@@ -2958,6 +3123,7 @@ function tick() {
   const frame = Math.min(clock.getDelta(), 0.5);
   const t = clock.elapsedTime;
   updateSnow(frame, t);
+  updateDust(frame, t);
   stepAcc += frame;
   let steps = 0;
   while (stepAcc >= FIXED_STEP && steps < MAX_STEPS) {
@@ -2982,7 +3148,7 @@ function tick() {
     sun.intensity = 0.45 + Math.random() * 0.1;
     lamp.intensity = 0.18 + Math.random() * 0.22;
   } else {
-    sun.intensity = 0.9;
+    sun.intensity = 0.85;
     lamp.intensity = 0.5 + Math.sin(t * 2) * 0.08;
   }
 
@@ -3010,6 +3176,7 @@ G.layoutsByLoc = loadLayouts();
 buildRoom();
 buildSeasonDecor();
 buildSnow();
+buildLightShaft();
 applyLayout(G.layoutsByLoc['metro'] != null ? G.layoutsByLoc['metro'] : 0);
 addShelf(0);
 
