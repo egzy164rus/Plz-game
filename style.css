@@ -104,6 +104,7 @@ button{font-family:inherit}
 .loc-layouts{margin-top:4px;border-top:1px solid var(--line);padding-top:8px}
 .loc-layouts>span{font-size:9.5px;letter-spacing:1.5px;color:#a99ecb;text-transform:uppercase}
 .layout-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.loc-fx{font-size:10.5px;line-height:1.35;color:#ffd60a;margin-top:6px;opacity:.95}
 .layout-chip{background:#2a2438;border:1px solid var(--line);color:#cfc6e8;border-radius:999px;padding:4px 10px;font:700 10.5px/1 inherit;cursor:pointer;transition:.15s}
 .layout-chip:hover{border-color:var(--yellow);color:#fff}
 .layout-chip.active{background:var(--yellow);border-color:var(--yellow);color:var(--ink)}

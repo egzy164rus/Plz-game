@@ -133,6 +133,7 @@ const genOrderId = () => {
   return 'WB-' + Date.now().toString().slice(-6);
 };
 const locBonus = () => LOCATIONS.find(l => l.id === G.location) || LOCATIONS[0];
+const layoutStats = () => (LAYOUTS[G.layout] && LAYOUTS[G.layout].stats) || { check: 1, patience: 1, stream: 1, rep: 1 };
 const cellLoc = cell => cell ? `Стеллаж ${cell.shelf + 1} · ячейка ${cell.row === 0 ? 'A' : 'B'}${cell.col + 1}` : '—';
 const TABLE_POS = { x: -4.4, z: -0.9 };
 const BIN_POS = { x: -6.6, z: 3.7 };
@@ -140,12 +141,24 @@ const COUNTER_POS = { x: 4.0, z: 2.4 };
 const COUNTER_APPROACH = { x: 4.0, z: 3.6 };
 const PALLET_POS = { x: -7.0, z: -1.0 };
 // Планировки зала — те же 0-3, что и схемы в каталоге помещений
+//  each plan: своя форма/мебель/свет + игровой эффект (fx) и множители (stats)
 const LAYOUTS = [
-  { name: 'Классика',   table: { x: -4.4, z: -0.9 }, bin: { x: -6.6, z: 3.7 },  counter: { x: 4.0, z: 2.4 }, pallet: { x: -7.0, z: -1.0 }, queueDir: 1, rug: { x: 4.0, z: 3.6 }, bench: null },
-  { name: 'Витрина',    table: { x: 4.3, z: -0.9 },  bin: { x: 6.3, z: 3.7 },   counter: { x: -4.0, z: 2.4 }, pallet: { x: 6.6, z: -1.3 }, queueDir: -1, rug: { x: -4.0, z: 3.6 }, bench: { x: 2.6, z: 4.55 } },
-  { name: 'Open space', table: { x: 0, z: -0.9 },    bin: { x: -7.35, z: -3.6 }, counter: { x: 4.0, z: 1.6 },  pallet: { x: -7.0, z: 0.3 },  queueDir: 1, rug: { x: 0, z: 1.7 },  bench: { x: -3.1, z: 3.4 } },
-  { name: 'Флагман',    table: { x: -3.6, z: -0.9 }, bin: { x: 6.7, z: -3.5 },   counter: { x: 1.6, z: 2.5 },  pallet: { x: 7.2, z: -0.7 },  queueDir: 1, rug: { x: 0.2, z: 4.15 }, bench: { x: -6.6, z: 2.5 } },
+  { name: 'Классика',   table: { x: -4.4, z: -0.9 }, bin: { x: -6.6, z: 3.7 },  counter: { x: 4.0, z: 2.4 }, pallet: { x: -7.0, z: -1.0 }, queueDir: 1, rug: { x: 4.0, z: 3.6 }, bench: null,
+    fx: 'Ровный зал без бонусов — тёплый старт', stats: { check: 1, patience: 1, stream: 1, rep: 1 } },
+  { name: 'Витрина',    table: { x: 4.3, z: -0.9 },  bin: { x: 6.3, z: 3.7 },   counter: { x: -4.0, z: 2.4 }, pallet: { x: 6.6, z: -1.3 }, queueDir: -1, rug: { x: -4.0, z: 3.6 }, bench: { x: 2.6, z: 4.55 },
+    fx: 'Витрина с сопуткой: средний чек +15% · поток +5%', stats: { check: 1.15, patience: 1, stream: 1.05, rep: 1 } },
+  { name: 'Open space', table: { x: 0, z: -0.9 },    bin: { x: -7.35, z: -3.6 }, counter: { x: 4.0, z: 1.6 },  pallet: { x: -7.0, z: 0.3 },  queueDir: 1, rug: { x: 0, z: 1.7 },  bench: { x: -3.1, z: 3.4 },
+    fx: 'Простор и тишина: терпение клиентов +20%', stats: { check: 1, patience: 1.2, stream: 1, rep: 1 } },
+  { name: 'Флагман',    table: { x: -3.6, z: -0.9 }, bin: { x: 6.7, z: -3.5 },   counter: { x: 1.6, z: 2.5 },  pallet: { x: 7.2, z: -0.7 },  queueDir: 1, rug: null, bench: { x: -6.6, z: 2.5 },
+    fx: 'Флагман: поток +25% · репутация +30% · чек +10%', stats: { check: 1.1, patience: 1, stream: 1.25, rep: 1.3 } },
 ];
+const ROOM_TINTS = [
+  { floor: 0xffffff, wall: 0xffffff, glow: 0xffd9a0, glowI: 0.4 },
+  { floor: 0xf2e0d1, wall: 0xeeddd2, glow: 0xffe2b0, glowI: 0.55 },
+  { floor: 0xe2ecdd, wall: 0xd3e6d7, glow: 0xfff0dd, glowI: 0.35 },
+  { floor: 0xe0d2f5, wall: 0xd8cbf0, glow: 0xffd9a0, glowI: 0.6 },
+];
+const roomRefs = { floorMat: null, wallMat: null };
 const layoutRefs = {};
 let counterGlowLight = null;
 let coffeeMachineRef = null;
@@ -457,9 +470,10 @@ function buildRoom() {
   const floorTex = TEX.floor();
   floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
   floorTex.repeat.set(4, 3);
+  roomRefs.floorMat = new THREE.MeshLambertMaterial({ map: floorTex, color: 0xffffff });
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(ROOM.x * 2, ROOM.z * 2),
-    new THREE.MeshLambertMaterial({ map: floorTex, color: 0xffffff })
+    roomRefs.floorMat
   );
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -477,6 +491,7 @@ function buildRoom() {
 
   const wallTex = TEX.wall();
   const wallMat = new THREE.MeshLambertMaterial({ map: wallTex });
+  roomRefs.wallMat = wallMat;
   const mkWall = (w, h, d, x, y, z, rotY = 0) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
     m.position.set(x, y, z); m.rotation.y = rotY; m.receiveShadow = true; m.castShadow = true;
@@ -1071,7 +1086,8 @@ function spawnCustomer() {
     * (G.upgrades.sofa ? BALANCE.sofaPatience : 1)
     * (G.upgrades.coffee ? BALANCE.coffeePatience : 1)
     * G.mods.patience
-    * locBonus().patience;
+    * locBonus().patience
+    * layoutStats().patience;
 
   const b = makeBubble('📱 Покажите QR');
 
@@ -1099,7 +1115,7 @@ function spawnReturner() {
   mesh.position.set(sx, 0, ROOM.z + 1.6);
   scene.add(mesh);
   const retId = genOrderId();
-  const patienceMax = 40 * G.mods.patience;
+  const patienceMax = 40 * G.mods.patience * layoutStats().patience;
   const b = makeBubble('↩️ Возврат ' + retId);
 
   const customer = {
@@ -1388,6 +1404,160 @@ function updateInventoryHUD() {
 }
 
 // ============================================================
+//  Фирменный облик каждого плана: свои формы, мебель, свет
+// ============================================================
+function trackExtra(obj) {
+  if (!layoutRefs.extras) layoutRefs.extras = [];
+  layoutRefs.extras.push(obj);
+}
+function buildClassicExtras() {
+  // Настенные часы между стеллажами
+  const clock = new THREE.Group(); clock.name = 'decor-clock';
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.06, 20), new THREE.MeshLambertMaterial({ color: 0x3a2a55 }));
+  rim.rotation.x = Math.PI / 2; clock.add(rim);
+  rim.scale.setScalar(1.3);
+  const face = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.065, 20), new THREE.MeshLambertMaterial({ color: 0xf6f2ea }));
+  face.rotation.x = Math.PI / 2; clock.add(face);
+  const hour = boxMesh(0.03, 0.1, 0.02, 0x241640, { castShadow: false }); hour.position.set(0, 0.045, 0.045); clock.add(hour);
+  const minute = boxMesh(0.02, 0.15, 0.02, 0x7b2ff7, { castShadow: false }); minute.position.set(0.035, 0.035, 0.045); minute.rotation.z = -0.6; clock.add(minute);
+  clock.position.set(0, 2.62, -5.18);
+  world.add(clock); trackExtra(clock);
+  // Тёплая напольная лампа у входа
+  const lamp = new THREE.Group(); lamp.name = 'decor-lamp';
+  const base = cylMesh(0.2, 0.24, 0.07, 0x3a2a55, 14); base.position.y = 0.035; lamp.add(base);
+  const pole = cylMesh(0.045, 0.045, 1.45, 0x241640, 8); pole.position.y = 0.76; lamp.add(pole);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(0.33, 0.32, 14, 1, true),
+    new THREE.MeshLambertMaterial({ color: 0xffd98a, emissive: 0xa86b1e, side: THREE.DoubleSide }));
+  shade.position.y = 1.5; lamp.add(shade);
+  const bulbLight = new THREE.PointLight(0xffd9a0, 0.35, 4.2);
+  bulbLight.position.set(0, 1.42, 0); lamp.add(bulbLight);
+  lamp.position.set(-7.3, 0, 0.6);
+  world.add(lamp); trackExtra(lamp);
+  addCollider(-7.55, -7.05, 0.35, 0.85, 'layout');
+}
+function buildVitrineUnit(x, z) {
+  const g = new THREE.Group(); g.name = 'decor-vitrine';
+  const frame = boxMesh(1.15, 1.5, 0.55, 0x5c4633); frame.position.y = 0.75; g.add(frame);
+  const backGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 1.15), new THREE.MeshBasicMaterial({ color: 0xffedc2 }));
+  backGlow.position.set(0, 0.85, -0.24); g.add(backGlow);
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.25),
+    new THREE.MeshPhongMaterial({ color: 0xcfeaff, transparent: true, opacity: 0.32, shininess: 90, side: THREE.DoubleSide, depthWrite: false }));
+  glass.position.set(0, 0.82, 0.285); g.add(glass);
+  const goldTop = boxMesh(1.2, 0.07, 0.6, 0xffd60a); goldTop.position.y = 1.53; g.add(goldTop);
+  const productCols = [0xff5c7a, 0x4cc9f0, 0x2ee6a8, 0xffd60a, 0xff8ad4, 0x7b2ff7];
+  for (const sy of [0.55, 0.95]) {
+    const shelf = boxMesh(1.0, 0.045, 0.42, 0xf6f2ea); shelf.position.set(0, sy, 0); g.add(shelf);
+    for (let i = 0; i < 3; i++) {
+      const prod = boxMesh(0.16, 0.2, 0.16, productCols[Math.floor(rand(0, productCols.length))]);
+      prod.position.set(-0.34 + i * 0.34, sy + 0.12, 0.02); g.add(prod);
+    }
+  }
+  const light = new THREE.PointLight(0xffe2b0, 0.4, 4.0);
+  light.position.set(0, 1.75, 0.35); g.add(light);
+  g.position.set(x, 0, z);
+  world.add(g); trackExtra(g);
+  addCollider(x - 0.65, x + 0.65, z - 0.35, z + 0.35, 'layout');
+}
+function buildVitrineExtras(L) {
+  buildVitrineUnit(L.counter.x - 2.35, L.counter.z);
+  buildVitrineUnit(L.counter.x + 2.35, L.counter.z);
+}
+function buildScreen(x, z) {
+  const g = new THREE.Group(); g.name = 'decor-screen';
+  const wood = 0xa8783f, woodDark = 0x8a6136;
+  const bottom = boxMesh(2.3, 0.09, 0.14, woodDark); bottom.position.y = 0.12; g.add(bottom);
+  const top = boxMesh(2.3, 0.09, 0.14, woodDark); top.position.y = 1.52; g.add(top);
+  for (let i = 0; i < 9; i++) {
+    const x0 = -1.04 + i * 0.26;
+    const slat = boxMesh(0.075, 1.34, 0.075, wood); slat.position.set(x0, 0.82, 0); g.add(slat);
+  }
+  for (const sx of [-1.08, 1.08]) { const leg = boxMesh(0.14, 1.6, 0.2, woodDark); leg.position.set(sx, 0.8, 0); g.add(leg); }
+  g.position.set(x, 0, z);
+  world.add(g); trackExtra(g);
+  addCollider(x - 1.15, x + 1.15, z - 0.12, z + 0.12, 'layout');
+}
+function buildPlant(x, z) {
+  const g = new THREE.Group(); g.name = 'decor-plant';
+  const pot = cylMesh(0.17, 0.13, 0.3, 0xc46b3f, 10); pot.position.y = 0.15; g.add(pot);
+  const f1 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.23, 0), new THREE.MeshLambertMaterial({ color: 0x2e8b4f, flatShading: true }));
+  f1.position.y = 0.48; f1.castShadow = true; g.add(f1);
+  const f2 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 0), new THREE.MeshLambertMaterial({ color: 0x3fa860, flatShading: true }));
+  f2.position.y = 0.7; f2.castShadow = true; g.add(f2);
+  g.position.set(x, 0, z);
+  world.add(g); trackExtra(g);
+  addCollider(x - 0.22, x + 0.22, z - 0.22, z + 0.22, 'layout');
+}
+function buildOpenSpaceExtras() {
+  buildScreen(-2.5, 1.0);
+  buildScreen(2.5, 1.0);
+  buildPlant(-1.45, 1.0);
+  buildPlant(1.45, 1.0);
+}
+function buildColumn(x, z) {
+  const g = new THREE.Group(); g.name = 'decor-column';
+  const shaft = cylMesh(0.34, 0.38, 3.3, 0xf4f1ea, 16); shaft.position.y = 1.65; g.add(shaft);
+  const base = cylMesh(0.46, 0.5, 0.1, 0xffd60a, 16); base.position.y = 0.05; g.add(base);
+  for (const ry of [0.42, 2.62]) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.045, 8, 20), new THREE.MeshLambertMaterial({ color: 0xd4af37, emissive: 0x4a3200 }));
+    ring.rotation.x = Math.PI / 2; ring.position.y = ry; g.add(ring);
+  }
+  g.position.set(x, 0, z);
+  world.add(g); trackExtra(g);
+  addCollider(x - 0.44, x + 0.44, z - 0.44, z + 0.44, 'layout');
+}
+function buildRunner(x) {
+  const g = new THREE.Group(); g.name = 'decor-runner';
+  const carpet = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 3.2), new THREE.MeshLambertMaterial({ color: 0x6d1fd6, emissive: 0x1e0530 }));
+  carpet.rotation.x = -Math.PI / 2; carpet.position.set(0, 0.02, 0); g.add(carpet);
+  for (const sx of [-0.66, 0.66]) {
+    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 3.2), new THREE.MeshLambertMaterial({ color: 0xffd60a }));
+    stripe.rotation.x = -Math.PI / 2; stripe.position.set(sx, 0.025, 0); g.add(stripe);
+  }
+  g.position.set(x, 0, 3.9);
+  world.add(g); trackExtra(g);
+}
+function buildPendant(x, z) {
+  const g = new THREE.Group(); g.name = 'decor-pendant';
+  const cord = cylMesh(0.015, 0.015, 0.95, 0x17121f, 6); cord.position.y = 2.82; g.add(cord);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.3, 12, 1, true),
+    new THREE.MeshLambertMaterial({ color: 0x2a2040, emissive: 0x2a1800, side: THREE.DoubleSide }));
+  shade.position.y = 2.32; g.add(shade);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe9b0 }));
+  bulb.position.y = 2.24; g.add(bulb);
+  g.position.set(x, 0, z);
+  world.add(g); trackExtra(g);
+}
+function buildFlagshipExtras(L) {
+  buildRunner(L.counter.x);
+  buildColumn(L.counter.x - 2.6, 0.4);
+  buildColumn(L.counter.x + 2.6, 0.4);
+  for (const pz of [3.0, 4.0, 5.0]) buildPendant(L.counter.x, pz);
+  const light = new THREE.PointLight(0xffd9a0, 0.5, 6.5);
+  light.position.set(L.counter.x, 2.15, 3.7);
+  world.add(light); trackExtra(light);
+}
+function buildLayoutExtras() {
+  const L = LAYOUTS[G.layout];
+  if (G.layout === 0) buildClassicExtras();
+  else if (G.layout === 1) buildVitrineExtras(L);
+  else if (G.layout === 2) buildOpenSpaceExtras();
+  else if (G.layout === 3) buildFlagshipExtras(L);
+}
+function removeLayoutExtras() {
+  const list = layoutRefs.extras || [];
+  for (const obj of list) {
+    if (obj && obj.parent) obj.parent.remove(obj);
+  }
+  layoutRefs.extras = [];
+}
+function applyRoomTint(idx) {
+  const t = ROOM_TINTS[idx] || ROOM_TINTS[0];
+  if (roomRefs.floorMat) roomRefs.floorMat.color.setHex(t.floor);
+  if (roomRefs.wallMat) roomRefs.wallMat.color.setHex(t.wall);
+  if (counterGlowLight) { counterGlowLight.color.setHex(t.glow); counterGlowLight.intensity = t.glowI; }
+}
+
+// ============================================================
 //  Планировки зала (3D): разные расстановки, выбираются игроком
 // ============================================================
 function buildRugBase(L) {
@@ -1415,11 +1585,13 @@ function buildLayoutObjects() {
   buildUnpackTable();
   buildBin();
   buildCounter();
-  buildRugBase(L);
+  if (L.rug) buildRugBase(L);
   if (L.bench) buildBench(L);
+  buildLayoutExtras();
 }
 function clearLayoutObjects() {
   removeLayoutColliders();
+  removeLayoutExtras();
   if (layoutRefs.counterTerm) { untagInteract(layoutRefs.counterTerm); layoutRefs.counterTerm = null; }
   for (const key of ['counter', 'table', 'bin', 'pallet', 'rugBase', 'bench']) {
     const obj = layoutRefs[key];
@@ -1443,17 +1615,24 @@ function applyLayout(idx) {
   if (nameBoard) nameBoard.position.set(COUNTER_POS.x, 2.35, COUNTER_POS.z);
   if (counterGlowLight) counterGlowLight.position.set(COUNTER_POS.x, 2.4, COUNTER_POS.z);
   if (coffeeMachineRef) coffeeMachineRef.position.set(COUNTER_POS.x - 1.05, 1.1, COUNTER_POS.z - 0.05);
+  applyRoomTint(idx);
   const ax = COUNTER_APPROACH.x, az = COUNTER_APPROACH.z, qd = L.queueDir;
   QUEUE_SLOTS[0].set(ax, 0, az + 0.15);
   QUEUE_SLOTS[1].set(ax + 1.25 * qd, 0, az + 0.55);
   QUEUE_SLOTS[2].set(ax + 2.5 * qd, 0, az + 0.75);
   if (typeof relayoutQueue === 'function') relayoutQueue();
-  // посылки на столе переезжают вместе со столом (строка из трёх)
-  const onTable = parcels.filter(p => !p.cell && Math.abs(p.mesh.position.y - 0.96) < 0.2
-    && Math.hypot(p.mesh.position.x - oldTable.x, p.mesh.position.z - oldTable.z) < 1.7);
+  // посылки на столе переезжают по сетке 3×2, напольные — вместе со столом
+  const onTable = parcels.filter(p => isTableParcel(p, oldTable.x, oldTable.z));
+  onTable.sort((a, b) => (a.mesh.position.z - b.mesh.position.z) || (a.mesh.position.x - b.mesh.position.x));
   onTable.forEach((p, i) => {
-    p.mesh.position.set(TABLE_POS.x + PARCEL_ROW[i % PARCEL_ROW.length], 0.96, TABLE_POS.z);
+    const slot = TABLE_SLOTS[i % TABLE_SLOTS.length];
+    p.floorRow = false;
+    p.mesh.position.set(TABLE_POS.x + slot.dx, 0.96, TABLE_POS.z + slot.dz);
   });
+  const dtx = TABLE_POS.x - oldTable.x, dtz = TABLE_POS.z - oldTable.z;
+  if (dtx || dtz) for (const p of parcels) {
+    if (p.floorRow) { p.mesh.position.x += dtx; p.mesh.position.z += dtz; }
+  }
   G.layoutsByLoc[G.location] = idx;
   saveLayouts();
 }
@@ -1483,7 +1662,7 @@ function renderLocations() {
     card.className = 'loc-card' + (current ? ' current' : '');
     card.dataset.loc = loc.id;
     const planChips = owned
-      ? `<div class="loc-layouts"><span>3D-планировка</span><div class="layout-chips">${LAYOUTS.map((l, i) => `<button class="layout-chip${i === curPlan ? ' active' : ''}" data-loc="${loc.id}" data-plan="${i}">${l.name}</button>`).join('')}</div></div>`
+      ? `<div class="loc-layouts"><span>3D-планировка</span><div class="loc-fx">⚡ ${LAYOUTS[curPlan].fx}</div><div class="layout-chips">${LAYOUTS.map((l, i) => `<button class="layout-chip${i === curPlan ? ' active' : ''}" data-loc="${loc.id}" data-plan="${i}">${l.name}</button>`).join('')}</div></div>`
       : '';
     const stats = `
       <div class="loc-stats">
@@ -1861,7 +2040,43 @@ function finishTtn() {
   AudioSys.scan();
   updateHUD();
 }
-const PARCEL_ROW = [-0.62, 0, 0.62];
+const PARCEL_ROW = [-0.62, 0, 0.62]; // legacy, оставлено для совместимости
+// Сетка мест на столе (2 ряда × 3 колонки) и полосы на полу — куда класть посылки,
+// чтобы они не сливались в одну точку при повторной приёмке
+const TABLE_SLOTS = [];
+for (const dz of [-0.28, 0.28]) for (const dx of [-0.62, 0, 0.62]) TABLE_SLOTS.push({ dx, dz });
+const FLOOR_SLOTS = [];
+for (const dz of [1.15, 1.7, 2.25]) for (const dx of [-1.24, -0.62, 0, 0.62, 1.24]) FLOOR_SLOTS.push({ dx, dz });
+function isTableParcel(p, tx, tz) {
+  if (p.cell) return false;
+  const m = p.mesh.position;
+  return Math.abs(m.y - 0.96) < 0.2 && Math.hypot(m.x - (tx == null ? TABLE_POS.x : tx), m.z - (tz == null ? TABLE_POS.z : tz)) < 1.5;
+}
+function nearestSlotIndex(x, z, base, slots, maxDist) {
+  let best = -1, bd = maxDist;
+  for (let i = 0; i < slots.length; i++) {
+    const d = Math.hypot(x - (base.x + slots[i].dx), z - (base.z + slots[i].dz));
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+function claimTableSlots(list) {
+  const used = new Set();
+  for (const p of list) {
+    const i = nearestSlotIndex(p.mesh.position.x, p.mesh.position.z, TABLE_POS, TABLE_SLOTS, 0.4);
+    if (i >= 0) used.add(i);
+  }
+  return TABLE_SLOTS.map((_, i) => i).filter(i => !used.has(i));
+}
+function claimFloorSlots() {
+  const used = new Set();
+  for (const p of parcels) {
+    if (!p.floorRow) continue;
+    const i = nearestSlotIndex(p.mesh.position.x, p.mesh.position.z, TABLE_POS, FLOOR_SLOTS, 0.4);
+    if (i >= 0) used.add(i);
+  }
+  return FLOOR_SLOTS.map((_, i) => i).filter(i => !used.has(i));
+}
 function finishUnpack() {
   const item = detachCarried();      // снять с рук
   item.mesh.position.set(TABLE_POS.x, 0.98, TABLE_POS.z);  // и на стол
@@ -1874,14 +2089,26 @@ function finishUnpack() {
 }
 function spawnUnpackedParcels() {
   const spawned = [];
+  const freeTable = claimTableSlots(parcels.filter(p => isTableParcel(p)));
+  const freeFloor = claimFloorSlots();
   for (let i = 0; i < BALANCE.parcelsPerBox; i++) {
-    const p = spawnParcel(TABLE_POS.x + PARCEL_ROW[i % 3], TABLE_POS.z, 0.96);
+    let x, z, y, floorRow = false;
+    if (freeTable.length) {
+      const slot = TABLE_SLOTS[freeTable.shift()];
+      x = TABLE_POS.x + slot.dx; z = TABLE_POS.z + slot.dz; y = 0.96;
+    } else {
+      const slot = FLOOR_SLOTS[freeFloor.length ? freeFloor.shift() : 0];
+      x = TABLE_POS.x + slot.dx; z = TABLE_POS.z + slot.dz; y = 0; floorRow = true;
+    }
+    const p = spawnParcel(x, z, y);
+    p.floorRow = floorRow;
     p.mesh.rotation.y = rand(-0.12, 0.12);
     spawned.push(p);
   }
   const defects = spawned.filter(p => p.type === 'defect').length;
   const thermal = spawned.filter(p => p.type === 'thermal').length;
-  let msg = 'Короб вскрыт: +3 посылки на столе';
+  const onFloor = spawned.filter(p => p.floorRow).length;
+  let msg = onFloor ? `Короб вскрыт: стол занят — ${onFloor} пос. на полу у стола` : 'Короб вскрыт: +3 посылки на столе';
   if (defects) msg = `Короб вскрыт · обнаружен брак: ${defects}!`;
   else if (thermal) msg = 'Короб вскрыт · есть ТЕРМО-посылки (60 с)';
   toast(msg, defects ? 'warn' : 'good');
@@ -1913,7 +2140,7 @@ function finishScan() {
 
   const loc = locBonus();
   const typeMul = parcel.type === 'fragile' ? BALANCE.fragilePayMul : parcel.type === 'thermal' ? BALANCE.thermalPayMul : 1;
-  const payout = Math.round((BALANCE.basePay + Math.random() * BALANCE.payRandom + (G.upgrades.coffee && Math.random() < BALANCE.tipChance ? BALANCE.tipAmount : 0)) * typeMul * loc.pay);
+  const payout = Math.round((BALANCE.basePay + Math.random() * BALANCE.payRandom + (G.upgrades.coffee && Math.random() < BALANCE.tipChance ? BALANCE.tipAmount : 0)) * typeMul * loc.pay * layoutStats().check);
   G.money += payout;
   G.dayEarned += payout;
   G.lifetimeEarned += payout;
@@ -1923,7 +2150,7 @@ function finishScan() {
     * (G.upgrades.poster ? 1.5 : 1)
     * (G.upgrades.palm ? 1.1 : 1)
     * (G.upgrades.rug ? 1.15 : 1)
-    * G.mods.repGain * loc.repGain;
+    * G.mods.repGain * loc.repGain * layoutStats().rep;
   addRep(repGain);
   toast(`Выдано ${parcel.id} · +${payout} ₽`, 'good');
   AudioSys.scan();
@@ -1941,7 +2168,7 @@ function finishReturn() {
   G.money += BALANCE.returnFee;
   G.dayEarned += BALANCE.returnFee;
   G.lifetimeEarned += BALANCE.returnFee;
-  addRep(0.02 * G.mods.repGain);
+  addRep(0.02 * G.mods.repGain * layoutStats().rep);
   toast(`Возврат оформлен · +${BALANCE.returnFee} ₽`, 'good');
   AudioSys.cash();
   if (customer && customer.state !== 'leaving') customerLeave(customer, 'served');
@@ -2219,15 +2446,44 @@ function updateLoader(dt) {
     L.mesh.position.addScaledVector(dir, Math.min(dist, BALANCE.loaderSpeed * dt));
     L.mesh.rotation.y = Math.atan2(dir.x, dir.z);
     L.walkPhase += dt * 9;
-    animateWalk(L.mesh, L.walkPhase, !!L.carrying);
+    animateWalk(L.mesh, L.walkPhase, !!L.carrying || !!L.carryingDefect);
     return false;
   };
   if (L.state === 'idle') {
     L.timer -= dt;
     if (L.timer <= 0) {
+      // Сначала: убрать брак с пола/стола в контейнер
+      const defect = parcels.find(p => p.type === 'defect' && !p.cell && !p.reservedBy);
+      if (defect) { L.target = defect; L.state = 'toDefect'; return; }
       const box = floorItems.find(i => i.kind === 'big');
       if (box && box.mesh.visible) { L.target = box; L.state = 'toBox'; }
       else L.timer = 1.5;
+    }
+  } else if (L.state === 'toDefect') {
+    const d = L.target;
+    if (!d || !parcels.includes(d)) { L.state = 'idle'; L.timer = 1; L.target = null; return; }
+    if (moveTo(d.mesh.position, 0.75)) {
+      for (let i = floorItems.length - 1; i >= 0; i--) if (floorItems[i].parcel === d) floorItems.splice(i, 1);
+      const pi = parcels.indexOf(d); if (pi >= 0) parcels.splice(pi, 1);
+      if (d.label && d.label.parent) d.label.parent.remove(d.label);
+      d.label = null;
+      untagInteract(d.mesh);
+      attachCarriedTo(loader, d.mesh);
+      L.carryingDefect = d;
+      L.target = null;
+      L.state = 'toBin';
+      parcelsDirty = true;
+    }
+  } else if (L.state === 'toBin') {
+    if (moveTo(BIN_POS, 1.05)) {
+      const m = L.carryingDefect && L.carryingDefect.mesh;
+      if (m && m.parent) m.parent.remove(m);
+      L.carryingDefect = null;
+      parcelsDirty = true;
+      L.state = 'idle';
+      L.timer = BALANCE.loaderCooldown;
+      AudioSys.crack();
+      toast('Денис утилизировал брак 🗑', 'good');
     }
   } else if (L.state === 'toBox') {
     if (!floorItems.includes(L.target)) { L.state = 'idle'; L.timer = 1; L.target = null; return; }
@@ -2549,7 +2805,7 @@ function updateDeliveries(dt) {
 function updateCustomersSpawn(dt) {
   G.customerTimer -= dt;
   if (G.customerTimer <= 0) {
-    const interval = BALANCE.customerEvery(G.day) * (G.upgrades.sign ? 0.75 : 1) * G.mods.customers / locBonus().customers;
+    const interval = BALANCE.customerEvery(G.day) * (G.upgrades.sign ? 0.75 : 1) * G.mods.customers / (locBonus().customers * layoutStats().stream);
     G.customerTimer = interval * rand(0.75, 1.3);
     if (G.day >= 2 && Math.random() < BALANCE.returnChance) spawnReturner();
     else spawnCustomer();
@@ -2711,7 +2967,26 @@ document.getElementById('btn-start').addEventListener('click', () => {
   toast(`ПВЗ «${G.pvzName}» открывается! 🔔`, 'good');
 });
 
-window.PVZ = { G, player, camera, renderer, parcels, customers, shelves, floorItems, spawnCustomer, spawnReturner, getInteraction, enterPlacement, LOCATIONS, LAYOUTS, TABLE_POS, BIN_POS, COUNTER_POS, PALLET_POS, QUEUE_SLOTS, applyLayout };
+window.PVZ = { G, player, camera, renderer, scene, parcels, customers, shelves, floorItems, spawnCustomer, spawnReturner, getInteraction, enterPlacement, LOCATIONS, LAYOUTS, ROOM_TINTS, TABLE_POS, BIN_POS, COUNTER_POS, PALLET_POS, QUEUE_SLOTS, TABLE_SLOTS, applyLayout };
+window.PVZ.debugClearParcels = function () {
+  for (let i = parcels.length - 1; i >= 0; i--) removeParcelWorld(parcels[i]);
+  return parcels.length;
+};
+window.PVZ.debugFillTable = function (n) {
+  for (let i = 0; i < n; i++) {
+    const slot = TABLE_SLOTS[i % TABLE_SLOTS.length];
+    const p = spawnParcel(TABLE_POS.x + slot.dx, TABLE_POS.z + slot.dz, 0.96);
+    p.mesh.position.set(TABLE_POS.x + slot.dx, 0.96, TABLE_POS.z + slot.dz);
+  }
+  return parcels.length;
+};
+window.PVZ.debugSpawnUnpacked = function () { spawnUnpackedParcels(); return parcels.length; };
+window.PVZ.debugSpawnParcel = function (type, x, z) {
+  const p = spawnParcel(x == null ? TABLE_POS.x : x, z == null ? TABLE_POS.z : z, 0, type || null);
+  p.mesh.position.y = type === 'defect' ? 0 : 0;
+  return p.id;
+};
+window.PVZ.hireLoader = hireLoader;
 renderRecords();
 updateHUD();
 camera.position.set(0, 7.6, 10);
